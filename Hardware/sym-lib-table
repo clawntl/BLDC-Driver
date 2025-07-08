@@ -1,0 +1,5 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "DRV8316CRRGFR")(type "KiCad")(uri "${KIPRJMOD}/DRV8316CRRGFR/DRV8316CRRGFR.kicad_sym")(options "")(descr ""))
+  (lib (name "Library")(type "KiCad")(uri "${KIPRJMOD}/Library.kicad_sym")(options "")(descr ""))
+)

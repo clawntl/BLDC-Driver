@@ -1,0 +1,198 @@
+(footprint "JST_PH_S6B-PH-K_1x06_P2.00mm_Horizontal Breakoff"
+	(version 20241229)
+	(generator "pcbnew")
+	(generator_version "9.0")
+	(layer "F.Cu")
+	(descr "JST PH series connector, S6B-PH-K (http://www.jst-mfg.com/product/pdf/eng/ePH.pdf), generated with kicad-footprint-generator")
+	(tags "connector JST PH horizontal")
+	(property "Reference" "J?"
+		(at 5 -2.55 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "525e7e2d-f2ce-480e-a3f4-ad0559d5b940")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "Conn_01x06"
+		(at 8.95 -5.2 0)
+		(layer "F.Fab")
+		(uuid "659f9cb3-43d4-4f5c-a33d-1097f9b098bf")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "eb0c5ba2-1fca-44bb-bae2-bf336fbbd016")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" "Generic connector, single row, 01x06, script generated (kicad-library-utils/schlib/autogen/connector/)"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "f240152d-3f13-459c-9147-e7814a613f96")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr through_hole)
+	(fp_line
+		(start -2.45 -1.85)
+		(end -2.45 1.85)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "16872259-3fb9-4a5c-bfa8-686458c9189a")
+	)
+	(fp_line
+		(start -2.45 1.85)
+		(end 12.45 1.85)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "36c83e50-c6e1-44fd-9a88-001b887eb400")
+	)
+	(fp_line
+		(start 12.45 -1.85)
+		(end -2.45 -1.85)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "0f9467cf-d326-400b-a29d-2ab11da96b78")
+	)
+	(fp_line
+		(start 12.45 1.85)
+		(end 12.45 -1.85)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "c9c4bfcf-36dc-430d-b91b-5fa564dd1934")
+	)
+	(fp_line
+		(start -0.5 1.85)
+		(end 0.5 1.85)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "c14c69f7-18e5-49ea-acb9-57b1add3ad46")
+	)
+	(fp_line
+		(start 0 1.35)
+		(end -0.5 1.85)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "e99c9375-95ed-4197-bacc-f46beb6e93f3")
+	)
+	(fp_line
+		(start 0.5 1.85)
+		(end 0 1.35)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "88132c4f-2c29-4e93-a342-a2be3e13579c")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 5.95 -4.7 0)
+		(layer "F.Fab")
+		(uuid "f3329210-18de-47fe-92f8-72392f73df35")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" thru_hole roundrect
+		(at 0 0)
+		(size 1.2 2.4)
+		(drill 0.75)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(roundrect_rratio 0.208333)
+		(uuid "aba73ec8-9e06-40c7-be49-5b00748c6947")
+	)
+	(pad "2" thru_hole oval
+		(at 2 0)
+		(size 1.2 2.4)
+		(drill 0.75)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "1a7836e6-b39e-435e-a8d6-326c2bc7e0dc")
+	)
+	(pad "3" thru_hole oval
+		(at 4 0)
+		(size 1.2 2.4)
+		(drill 0.75)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "0d5190cb-28fb-44a0-8b8b-8ef586fb63f9")
+	)
+	(pad "4" thru_hole oval
+		(at 6 0)
+		(size 1.2 2.4)
+		(drill 0.75)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "d186833b-4236-47e9-8bc0-0b9bd8232422")
+	)
+	(pad "5" thru_hole oval
+		(at 8 0)
+		(size 1.2 2.4)
+		(drill 0.75)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "3ab64728-feb4-4c74-b407-7becef99dec1")
+	)
+	(pad "6" thru_hole oval
+		(at 10 0)
+		(size 1.2 2.4)
+		(drill 0.75)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "a351fd32-b67b-439e-bae5-ea5c36245768")
+	)
+	(embedded_fonts no)
+	(model "${KICAD9_3DMODEL_DIR}/Connector_JST.3dshapes/JST_PH_S6B-PH-K_1x06_P2.00mm_Horizontal.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)

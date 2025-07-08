@@ -1,0 +1,144 @@
+(footprint "DebugHeader2x02_P1.27mm"
+	(version 20241229)
+	(generator "pcbnew")
+	(generator_version "9.0")
+	(layer "F.Cu")
+	(descr "Through hole straight pin header, 2x02, 1.27mm pitch, double rows")
+	(tags "Through hole pin header THT 2x02 1.27mm double row")
+	(property "Reference" "REF**"
+		(at 0.62 -2.17 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "8ab33c08-2d2a-40f9-8fbb-899f88b0e2bc")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "DebugHeader2x02_P1.27mm"
+		(at 0.635 3.015 0)
+		(layer "F.Fab")
+		(uuid "c88d99e7-7a23-423c-82cb-1a387b3044bd")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "2f9047d4-dc8c-46ed-a6d5-3f667303e0aa")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "83e632c8-d948-43c4-b273-789c70fb7daf")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr through_hole)
+	(fp_line
+		(start -0.75 -0.75)
+		(end -0.75 2.02)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "cd584f1c-c599-44b7-a2a9-d61c233cab92")
+	)
+	(fp_line
+		(start -0.75 2.02)
+		(end 2.02 2.02)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "f698c1b9-5a24-4247-894c-1048f41e9347")
+	)
+	(fp_line
+		(start 2.02 -0.75)
+		(end -0.75 -0.75)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "1348ec98-eb98-4bb2-9b22-20222b14406b")
+	)
+	(fp_line
+		(start 2.02 2.02)
+		(end 2.02 -0.75)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "994afd45-15b6-4e4d-a417-3a2a741979d5")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0.635 0.635 90)
+		(layer "F.Fab")
+		(uuid "f7a0c2fb-a1c0-4808-b3c3-c26720b13fd2")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" smd circle
+		(at 0 0)
+		(size 1 1)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "35734909-7c1f-4f93-b63e-309e25feebb0")
+	)
+	(pad "2" smd circle
+		(at 1.27 0)
+		(size 1 1)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "0acba86c-5965-42c7-add0-066b062f33be")
+	)
+	(pad "3" smd circle
+		(at 0 1.27)
+		(size 1 1)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "21f789ad-b1f6-4cf7-be98-05e350845b58")
+	)
+	(pad "4" smd circle
+		(at 1.27 1.27)
+		(size 1 1)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "7d689c62-2e79-4a2a-a4ec-9577006d6cd9")
+	)
+	(embedded_fonts no)
+	(model "${KICAD9_3DMODEL_DIR}/Connector_PinHeader_1.27mm.3dshapes/PinHeader_2x02_P1.27mm_Vertical.step"
+		(hide yes)
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)
