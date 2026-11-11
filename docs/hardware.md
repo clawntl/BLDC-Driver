@@ -24,7 +24,7 @@ The source of truth is [`Firmware/include/pins.h`](../Firmware/include/pins.h).
 |---|---|---|
 | Phase A high / low | PA10 / PB15 | TIM1 6-PWM |
 | Phase B high / low | PA9 / PB14 | |
-| Phase C high / low | PA8 / PB13 | The v0.2 pinout image labels this "PA9". The firmware and schematic use PA8 |
+| Phase C high / low | PA8 / PB13 | |
 | Current sense A / B / C | PA0 / PA1 / PA2 | DRV8316 low-side CSA outputs, ADC1 |
 | DRV8316 SPI | PA5 SCK, PA6 MISO, PA7 MOSI, PA4 CS | SPI1, shared with the encoder |
 
