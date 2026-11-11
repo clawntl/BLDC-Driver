@@ -36,6 +36,7 @@ The board includes an optional **AS5048A** magnetic encoder on a break-away tab.
 
 - **[Hardware guide](docs/hardware.md)**: pin mapping, connectors, jumpers, buttons, LEDs and manufacturing notes.
 - **[Firmware guide](docs/firmware.md)**: building, flashing, first-time configuration, the serial console, tuning parameters and the bench-test firmware.
+- **[Test routines](docs/test-routines.md)**: step-by-step bench testing of a board, motor and encoder with the `motor_test` firmware, with expected readings and troubleshooting.
 - **[CAN protocol](docs/can-protocol.md)**: message IDs, frame formats, status and error codes, plus an example host program.
 
 ## Quick start

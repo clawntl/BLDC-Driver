@@ -160,7 +160,7 @@ pio run -e motor_test -t upload
 pio device monitor
 ```
 
-Type `help` in the monitor. The recommended order:
+Type `help` in the monitor. For a full step-by-step procedure with expected readings and troubleshooting for each step, see **[Test routines](test-routines.md)**. In summary:
 
 | Step | Command | What it checks |
 |---|---|---|

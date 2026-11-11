@@ -14,7 +14,11 @@
 #define DRV_CS     PA4
 #define ENC_CS     PC4
 
-#define CAN_EN  PC10
+#define CAN_EN  PC10 // CAN transceiver enable: HIGH = on
+
+// FDCAN1 RX is on PB8, which is also BOOT0 (10k pull-down + BOOT button to
+// 3V3). See softwareReset() in dfu.cpp for why that matters.
+#define CAN_RX_BOOT0 PB8
 
 #define PHA_H   PA10
 #define PHA_L   PB15
