@@ -168,9 +168,7 @@ static void cmdSave() {
 
     const bool ok = saveBoardSettings();
     Serial.println(ok ? "Settings saved and verified. Rebooting..." : "ERROR: flash verify failed! Rebooting...");
-    Serial.flush();
-    delay(50);
-    NVIC_SystemReset();
+    softwareReset();
 }
 
 static void handleLine(char *line) {
@@ -190,7 +188,7 @@ static void handleLine(char *line) {
     else if (!strcasecmp(line, "save"))   cmdSave();
     else if (!strcasecmp(line, "revert")) { pendingSettings() = activeSettings(); Serial.println("Pending changes discarded."); }
     else if (!strcasecmp(line, "start"))  requestStartFOC();
-    else if (!strcasecmp(line, "reboot")) { Serial.println("Rebooting..."); Serial.flush(); delay(50); NVIC_SystemReset(); }
+    else if (!strcasecmp(line, "reboot")) { Serial.println("Rebooting..."); softwareReset(); }
     else if (!strcasecmp(line, "dfu"))    { Serial.println("Entering DFU mode..."); Serial.flush(); rebootToDFU(); }
     else {
         Serial.print("Unknown command: ");

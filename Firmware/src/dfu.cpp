@@ -79,6 +79,36 @@ void rebootToDFU() {
     jumpToBootloader();
 }
 
+void softwareReset() {
+    // Disable the CAN transceiver so it stops driving RX (= BOOT0) high, and
+    // take PB8 away from FDCAN so we can read what the pin is actually doing.
+    pinMode(CAN_EN, OUTPUT);
+    digitalWrite(CAN_EN, LOW);
+    pinMode(CAN_RX_BOOT0, INPUT);
+
+    const uint32_t start = millis();
+    while (digitalRead(CAN_RX_BOOT0) == HIGH && (millis() - start) < 100) {
+        // The watchdog may be running (FOC was started); don't let it fire mid-wait.
+        if (IWatchdog.isEnabled()) IWatchdog.reload();
+    }
+
+    if (digitalRead(CAN_RX_BOOT0) == HIGH) {
+        // Either the transceiver keeps RX driven when disabled, or the BOOT
+        // button is being held. Reset anyway; the bootloader will start.
+        Serial.println("WARNING: BOOT0 (PB8) still high with the CAN transceiver disabled - "
+                       "the board will probably start the DFU bootloader. Press reset to recover.");
+    } else {
+        Serial.print("BOOT0 low after ");
+        Serial.print(millis() - start);
+        Serial.println(" ms - resetting");
+    }
+    if (IWatchdog.isEnabled()) IWatchdog.reload();
+    Serial.flush();
+    delay(20);
+
+    NVIC_SystemReset();
+}
+
 void checkDfuRequestAtBoot() {
     enableBackupRegisterAccess();
     if (TAMP->BKP0R == DFU_REQUEST_MAGIC) {
