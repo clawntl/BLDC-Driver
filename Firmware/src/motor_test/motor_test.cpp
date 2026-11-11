@@ -3,7 +3,7 @@
 //  BLDC driver board.
 //
 //  Built ONLY by the `motor_test` PlatformIO environment (see platformio.ini).
-//  The normal `left` / `right` builds exclude this folder, and this build
+//  The normal `driver` build excludes this folder, and this build
 //  excludes main.cpp / motor_control.cpp / can_bus.cpp. It shares pins.h,
 //  motor_config.h, clock_config.cpp and dfu.cpp with the real firmware so the
 //  hardware setup can't drift from what the robot actually runs.
