@@ -36,7 +36,7 @@ It's the successor to [BLDC-Driver](https://github.com/clawntl/BLDC-Driver). The
 
 ## Known issues
 
-This is hardware revision **Rev 01** (Mk2). Known problems will be listed here and fixed in Mk3.
+This is hardware revision **Rev 01** (Mk2). Known problems will be listed here and fixed in Mk3. See [MK3.md](MK3.md) for planned Mk3 changes.
 
 ## License
 
