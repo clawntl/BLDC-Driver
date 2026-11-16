@@ -46,7 +46,7 @@ All frames are sent on the board's telemetry ID.
 | CMD | Name | Payload | When |
 |---|---|---|---|
 | `0x02` | `CMD_SHAFT_VELOCITY` | float rad/s (sign follows the invert setting) | Every 10 ms while FOC runs |
-| `0x03` | `CMD_DRIVER_STATUS` | `[state][flags][0][0]` | Every 100 ms, in every state |
+| `0x03` | `CMD_DRIVER_STATUS` | `[state][flags][supply mV, 2 bytes]` | Every 100 ms, in every state |
 | `0x10` | `CMD_START_FOC` | float `1.0` = started, `0.0` = failed | After each start request |
 | `0xFF` | `CMD_ERROR` | float error code | On an error |
 
@@ -60,6 +60,12 @@ All frames are 5 bytes long: one command byte plus four payload bytes.
 | 1 | `IDLE` | Waiting for `CMD_START_FOC` |
 | 2 | `RUNNING` | FOC running and accepting current commands |
 | 3 | `FAULT` | FOC start failed. Send `CMD_START_FOC` to retry |
+
+### Supply voltage (status bytes 3–4)
+
+The driver's supply (battery) voltage in millivolts, as an unsigned 16-bit big-endian integer, low-pass filtered with a time constant of about 200 ms. `0` means there is no reading yet; firmware from before this field was added always sends `0`. Both drivers on a robot normally share one battery, so the host can average the two readings.
+
+The voltage is measured through the V_SENS divider. Before FOC starts it is read with `analogRead()`; once the current sense is running it is read with regular ADC1 conversions alongside the current-sense injected conversions (see `src/supply_monitor.h`). Its accuracy depends on `VSENS_CALIBRATION` (see the [firmware guide](firmware.md#configuration-firmwareincludemotor_configh)).
 
 ### Status flags (status byte 2)
 
@@ -125,5 +131,8 @@ while True:
     if msg and msg.data[0] == CMD_SHAFT_VELOCITY:
         side = "L" if msg.arbitration_id == LEFT_TLM else "R"
         print(side, struct.unpack(">f", bytes(msg.data[1:5]))[0], "rad/s")
+    elif msg and msg.data[0] == CMD_DRIVER_STATUS:
+        side = "L" if msg.arbitration_id == LEFT_TLM else "R"
+        print(side, "supply", struct.unpack(">H", bytes(msg.data[3:5]))[0] / 1000, "V")
     time.sleep(0.005)
 ```

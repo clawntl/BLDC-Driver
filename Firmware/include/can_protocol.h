@@ -27,8 +27,9 @@ enum CAN_CMD : uint8_t {
     CMD_SHAFT_VELOCITY = 0x02,
 
     // Driver -> host, every CAN_STATUS_INTERVAL_MS (also while FOC is not running).
-    // [0x03][DriverState][status flags (STATUS_FLAG_*)][0][0]
+    // [0x03][DriverState][status flags (STATUS_FLAG_*)][supply mV, uint16 big-endian]
     // The host can wait for DRIVER_STATE_IDLE before sending CMD_START_FOC.
+    // Supply mV = 0 means no reading yet (firmware before this field also sent 0).
     CMD_DRIVER_STATUS = 0x03,
 
     // Host -> driver: start FOC (motor init + alignment, blocks ~1-3 s).
