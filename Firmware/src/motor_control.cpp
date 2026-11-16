@@ -13,6 +13,7 @@
 #include "can_bus.h"
 #include "motor_config.h"
 #include "supply_voltage.h"
+#include "supply_monitor.h"
 #include "board_settings.h"
 
 static SPIClass SPI_1(SPI1_MOSI, SPI1_MISO, SPI1_SCK);
@@ -123,6 +124,8 @@ void setupFOC() {
     supply_voltage = measuredSupplyVoltageOrDefault();
     driver.voltage_power_supply = supply_voltage;
     driver.voltage_limit = min(MOTOR_VOLTAGE_LIMIT, driver.voltage_power_supply);
+    // Live VIN for the CAN heartbeat (analogRead() until the current sense starts).
+    initSupplyMonitor();
 
     driver.init(&SPI_1);
 
@@ -197,7 +200,11 @@ static bool startFOC() {
         return false;
     }
 
-    if (current_sense.init())  Serial.println("Current sense init success!");
+    // From here on ADC1 belongs to the current sense: the supply monitor
+    // switches to regular conversions (and analogRead() must not be used).
+    const bool csOk = current_sense.init();
+    supplyMonitorCurrentSenseStarted();
+    if (csOk)  Serial.println("Current sense init success!");
     else {
         Serial.println("Current sense init failed!");
         sendError(ERR_CURRENT_SENSE);

@@ -9,6 +9,7 @@
 #include "motor_control.h"
 #include "motor_config.h"
 #include "board_settings.h"
+#include "supply_monitor.h"
 
 static void float2bytesMSB(float val, uint8_t *bytes) {
     // Copy the raw bits of val into an integer so can perform
@@ -124,7 +125,10 @@ void sendStartResult(bool ok) {
 }
 
 static void sendStatus() {
-    const uint8_t frame[5] = { CMD_DRIVER_STATUS, driverState(), statusFlags(), 0, 0 };
+    // Bytes 3-4: supply voltage in mV, big-endian (0 = no reading yet).
+    const uint16_t mv = supplyMillivolts();
+    const uint8_t frame[5] = { CMD_DRIVER_STATUS, driverState(), statusFlags(),
+                               (uint8_t)(mv >> 8), (uint8_t)(mv & 0xFF) };
     sendFrame(frame, sizeof(frame), telemetryCanAddr());
 }
 

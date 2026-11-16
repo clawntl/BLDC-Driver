@@ -12,6 +12,7 @@
 #include "can_bus.h"
 #include "can_protocol.h"
 #include "motor_control.h"
+#include "supply_monitor.h"
 #include "serial_console.h"
 #include "dfu.h"
 
@@ -106,6 +107,8 @@ void loop() {
     pollSerialConsole();
 
     motorControlLoop();
+
+    updateSupplyMonitor();
 
     pollCAN();
 

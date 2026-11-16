@@ -6,6 +6,7 @@
 #include <strings.h>
 
 #include "board_settings.h"
+#include "supply_monitor.h"
 #include "can_bus.h"
 #include "can_protocol.h"
 #include "dfu.h"
@@ -76,8 +77,10 @@ void printConfig() {
 
     const uint8_t flags = statusFlags();
     Serial.print("Supply:  ");
+    Serial.print(supplyVoltageNow(), 2);
+    Serial.print(" V now, ");
     Serial.print(measuredSupplyVoltage(), 2);
-    Serial.println(" V (measured at boot)");
+    Serial.println(" V at boot (used for PWM scaling)");
     Serial.print("Current: ");
     Serial.print(commandedCurrent(), 3);
     Serial.print(" A commanded");

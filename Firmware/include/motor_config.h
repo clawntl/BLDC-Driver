@@ -39,7 +39,14 @@
 #define COMMAND_TIMEOUT_MS 100
 
 // How often the CMD_DRIVER_STATUS heartbeat is sent over CAN, in milliseconds.
+// It also carries the live supply voltage (see supply_monitor.h).
 #define CAN_STATUS_INTERVAL_MS 100
+
+// Live supply voltage: sample interval and low-pass filter time constant, in
+// milliseconds. Each sample is one ADC conversion (~7 us), so this costs
+// nothing noticeable in the FOC loop.
+#define SUPPLY_SAMPLE_INTERVAL_MS 10
+#define SUPPLY_FILTER_TAU_MS      200
 
 // How often the DRV8316 fault status is polled over SPI while FOC runs.
 #define DRV_STATUS_POLL_INTERVAL_MS 500
