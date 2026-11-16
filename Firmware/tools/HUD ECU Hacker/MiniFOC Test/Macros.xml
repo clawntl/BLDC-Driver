@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Xml Version="2">
+    <Macro Display="MiniFOC Test"
+           Description="Bench test for a MiniFOC motor driver over CAN (1 Mbit/s classic, 11 bit IDs).
+                        Auto test: runs the CAN test sequence and prints PASS / FAIL lines. Only ONE MiniFOC on the bus.
+                        Manual current: starts FOC if needed, then sends the entered current every Interval ms until Stop.
+                        Switch OFF 'Send always 8 data bytes'. The motor WILL spin: clamp it or lift the wheel."
+           Usage="CanRaw_Terminal"
+           Protocol="CanRaw"
+           ScriptFile="MiniFocTest.cs"
+           Function="MiniFocTest" >
+           <Param Type="Select"   Width="60"  Label="Side:"          FixValues="Left, Right" />
+           <Param Type="Select"   Width="110" Label="Mode:"          FixValues="Auto test, Manual current" />
+           <Param Type="Text"     Width="50"  Label="Current (A):"   Default="0.3" />
+           <Param Type="DecValue" Width="40"  Label="Interval (ms):" Default="10" />
+    </Macro>
+</Xml>

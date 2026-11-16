@@ -1,0 +1,910 @@
+#!/usr/bin/env python3
+"""
+MiniFOC CAN bench test tool.
+
+Talks to a MiniFOC motor driver over CAN (1 Mbit/s classic CAN, 11-bit IDs,
+protocol in Firmware/include/can_protocol.h) and either runs an automatic
+test sequence or lets you poke the driver by hand.
+
+Commands
+  auto     Run the test sequence, print PASS / FAIL, exit code 0 if all pass.
+  monitor  Print every MiniFOC frame on the bus, decoded. Sends nothing.
+  run      Start FOC if needed, then hold --current until Ctrl+C. Prints the
+           mean velocity, state and flags once a second.
+  busoff   Bus-off recovery test: spins the motor, asks you to unplug the
+           CAN cable for a couple of seconds, and checks that the driver
+           drops the current, keeps running and comes back on the bus.
+  list     List the connected adapters (elmue) or channels (python-can).
+
+Bit timing defaults to what the driver uses (1 Mbit/s, 87.5 %, classic CAN);
+--bitrate, --sample-point, --fd, --data-bitrate, --data-sample-point change it.
+The prescaler/segments are calculated from the adapter's clock and limits.
+GUI: python minifoc_cantest_gui.py
+
+Adapters (--backend)
+  elmue      (default) Candlelight adapter with ElmuSoft's CANable 2.5
+             firmware, e.g. WeAct USB2CANFD v2. Uses ElmuSoft's Python classes
+             (BSD-3), bundled in ./elmue (see elmue/README.md).
+             No pip packages needed.
+             Close HUD ECU Hacker first (only one program can open the adapter).
+  python-can Any python-can interface (pip install python-can), e.g.
+               --backend python-can --interface slcan --channel COM5
+               --backend python-can --interface socketcan --channel can0
+             (for socketcan, set the bitrate with `ip link` beforehand).
+
+Examples
+  python minifoc_cantest.py --side right auto
+  python minifoc_cantest.py --side left run --current 0.5
+  python minifoc_cantest.py monitor
+
+SAFETY: the motor WILL spin. Clamp it or lift the wheel. `auto` must have
+only ONE MiniFOC on the bus (it sends current to the other side's half of
+0x020 to check that it is ignored).
+"""
+
+import argparse
+import math
+import os
+import struct
+import sys
+import time
+
+sys.dont_write_bytecode = True
+
+# ----------------------------------------------------------------------------
+# Protocol (Firmware/include/can_protocol.h)
+# ----------------------------------------------------------------------------
+
+BOTH_MOTOR_ID = 0x020
+SIDES = {
+    #        command ID, telemetry ID, byte offset in 0x020
+    "left":  (0x021, 0x101, 0),
+    "right": (0x022, 0x100, 4),
+}
+
+CMD_SHAFT_VELOCITY = 0x02
+CMD_DRIVER_STATUS  = 0x03
+CMD_START_FOC      = 0x10
+CMD_ERROR          = 0xFF
+
+STATE_NAMES = {0: "unconfigured", 1: "idle", 2: "running", 3: "fault (FOC start failed)"}
+STATE_IDLE, STATE_RUNNING, STATE_FAULT = 1, 2, 3
+
+FLAG_TIMEOUT, FLAG_CALIBRATION, FLAG_INVERTED, FLAG_DRV_FAULT = 1, 2, 4, 8
+
+ERROR_NAMES = {
+    1: "motor init failed",
+    2: "current sense init failed",
+    3: "FOC init / sensor alignment failed",
+    4: "DRV8316 fault",
+}
+
+# initFOC() blocks (motor init, current sense offset calibration, encoder and
+# current sense alignment) and sends nothing on CAN meanwhile. Well over 5 s
+# on Mk2 without a stored alignment.
+START_TIMEOUT_S = 20.0
+
+
+def be_float(data, pos):
+    return struct.unpack(">f", bytes(data[pos:pos + 4]))[0]
+
+
+def flag_names(flags):
+    names = [n for bit, n in ((FLAG_TIMEOUT, "timeout"), (FLAG_CALIBRATION, "stored-alignment"),
+                              (FLAG_INVERTED, "inverted"), (FLAG_DRV_FAULT, "DRV-fault")) if flags & bit]
+    return " ".join(names) if names else "none"
+
+
+def state_name(state):
+    if state is None:
+        return "unknown (no status received)"
+    return STATE_NAMES.get(state, "invalid (%d)" % state)
+
+
+def decode(can_id, data):
+    """Human-readable decoding of a MiniFOC frame, or None if not one."""
+    d = bytes(data)
+    if can_id == BOTH_MOTOR_ID:
+        if len(d) != 8:
+            return "current command, INVALID length %d" % len(d)
+        return "current command  left %.3f A, right %.3f A" % (be_float(d, 0), be_float(d, 4))
+    for side, (cmd_id, tele_id, _) in SIDES.items():
+        if can_id == cmd_id and d:
+            return "%s command 0x%02X%s" % (side, d[0], " (START_FOC)" if d[0] == CMD_START_FOC else "")
+        if can_id == tele_id and d:
+            c = d[0]
+            if c == CMD_DRIVER_STATUS and len(d) >= 3:
+                return "%s status   %s, flags %s" % (side, state_name(d[1]), flag_names(d[2]))
+            if c == CMD_SHAFT_VELOCITY and len(d) >= 5:
+                return "%s velocity %.2f rad/s" % (side, be_float(d, 1))
+            if c == CMD_START_FOC and len(d) >= 5:
+                return "%s START_FOC reply %s" % (side, "OK" if be_float(d, 1) == 1.0 else "FAILED")
+            if c == CMD_ERROR and len(d) >= 5:
+                code = int(be_float(d, 1))
+                return "%s ERROR %d (%s)" % (side, code, ERROR_NAMES.get(code, "unknown"))
+            return "%s telemetry, unknown command 0x%02X" % (side, c)
+    return None
+
+
+# ----------------------------------------------------------------------------
+# Console colours (ANSI; os.system("") enables them in the Windows console)
+# ----------------------------------------------------------------------------
+
+if sys.platform == "win32":
+    os.system("")
+USE_COLOR = sys.stdout.isatty()
+
+
+def color(text, code):
+    return "\033[%sm%s\033[0m" % (code, text) if USE_COLOR else text
+
+
+_ANSI = {"info": None, "warn": "33", "error": "31", "pass": "32", "fail": "31;1", "dim": "90", "prompt": "36;1"}
+
+
+def _print_output(text, kind):
+    code = _ANSI.get(kind)
+    print(color(text, code) if code else text, flush=True)
+
+
+# All output goes through here; the GUI replaces it with set_output().
+_output = _print_output
+
+
+def set_output(func):
+    """func(text, kind) with kind in info/warn/error/pass/fail/dim/prompt."""
+    global _output
+    _output = func
+
+
+def emit(text, kind="info"):
+    _output(text, kind)
+
+
+def info(msg):
+    emit(msg, "info")
+
+
+def warn(msg):
+    emit(msg, "warn")
+
+
+def error(msg):
+    emit(msg, "error")
+
+
+# ----------------------------------------------------------------------------
+# Bus settings and bit timing
+# ----------------------------------------------------------------------------
+
+# What the MiniFOC firmware uses (can_protocol.h). Other settings are allowed
+# (e.g. to sniff another bus) but the driver won't talk to the adapter.
+DRIVER_BITRATE = 1_000_000
+DRIVER_SAMPLE_POINT = 87.5
+
+
+class CanSettings:
+    def __init__(self, bitrate=DRIVER_BITRATE, sample_point=DRIVER_SAMPLE_POINT,
+                 fd=False, data_bitrate=2_000_000, data_sample_point=75.0):
+        self.bitrate = int(bitrate)
+        self.sample_point = float(sample_point)
+        self.fd = bool(fd)
+        self.data_bitrate = int(data_bitrate)
+        self.data_sample_point = float(data_sample_point)
+
+    def describe(self):
+        s = "%s @ %.1f %%" % (fmt_bitrate(self.bitrate), self.sample_point)
+        if self.fd:
+            s += ", CAN FD data %s @ %.1f %%" % (fmt_bitrate(self.data_bitrate), self.data_sample_point)
+        return s
+
+    def warn_if_not_driver(self):
+        if self.bitrate != DRIVER_BITRATE or abs(self.sample_point - DRIVER_SAMPLE_POINT) > 0.1:
+            warn("Note: the MiniFOC firmware uses %s @ %.1f %% classic CAN; these settings won't match it."
+                 % (fmt_bitrate(DRIVER_BITRATE), DRIVER_SAMPLE_POINT))
+
+
+def fmt_bitrate(b):
+    if b >= 1_000_000 and b % 1_000_000 == 0:
+        return "%d Mbit/s" % (b // 1_000_000)
+    if b >= 1000 and b % 1000 == 0:
+        return "%d kbit/s" % (b // 1000)
+    return "%d bit/s" % b
+
+
+def parse_bitrate(text):
+    """'1M', '500k', '1000000' -> int."""
+    t = str(text).strip().lower().replace("bit/s", "").replace("bps", "").strip()
+    mult = 1
+    if t.endswith("m"):
+        mult, t = 1_000_000, t[:-1]
+    elif t.endswith("k"):
+        mult, t = 1000, t[:-1]
+    return int(round(float(t) * mult))
+
+
+def _segments(clk, brp, bitrate, sample_point, lim):
+    """(brp, seg1, seg2, actual_sample_point) for the bitrate (within 0.1 %, e.g.
+    83.333k), or None."""
+    n = int(round(clk / (brp * bitrate)))  # time quanta per bit = 1 + seg1 + seg2
+    if n < 3 or abs(clk / (brp * n) - bitrate) > bitrate * 0.001:
+        return None
+    seg2 = int(round(n * (100.0 - sample_point) / 100.0))
+    seg2 = max(lim.seg2_min, min(lim.seg2_max, seg2))
+    seg1 = n - 1 - seg2
+    if not lim.seg1_min <= seg1 <= lim.seg1_max:
+        return None
+    return brp, seg1, seg2, 100.0 * (1 + seg1) / n
+
+
+def calc_timing(clk, bitrate, sample_point, lim):
+    """Best sample point match; on a tie the smallest prescaler (ElmuSoft's advice)."""
+    best = None
+    for brp in range(max(1, lim.brp_min), lim.brp_max + 1):
+        r = _segments(clk, brp, bitrate, sample_point, lim)
+        if r and (best is None or abs(r[3] - sample_point) < abs(best[3] - sample_point) - 1e-9):
+            best = r
+    return best
+
+
+def calc_timing_fd(clk, s, lim_nom, lim_data):
+    """Nominal + data timing, preferring one shared prescaler (ElmuSoft's advice)."""
+    best = None
+    for brp in range(max(1, lim_nom.brp_min, lim_data.brp_min), min(lim_nom.brp_max, lim_data.brp_max) + 1):
+        n = _segments(clk, brp, s.bitrate, s.sample_point, lim_nom)
+        d = _segments(clk, brp, s.data_bitrate, s.data_sample_point, lim_data)
+        if n and d:
+            err = abs(n[3] - s.sample_point) + abs(d[3] - s.data_sample_point)
+            if best is None or err < best[0] - 1e-9:
+                best = (err, n, d)
+    if best:
+        return best[1], best[2]
+    return (calc_timing(clk, s.bitrate, s.sample_point, lim_nom),
+            calc_timing(clk, s.data_bitrate, s.data_sample_point, lim_data))
+
+
+# ----------------------------------------------------------------------------
+# Adapter backends: send(id, data), recv(timeout_s) -> (id, data) | None, close()
+# ----------------------------------------------------------------------------
+
+def _fix_elmue_setupapi_types():
+    """ElmuSoft's OsLibrary_Windows.py calls the SetupAPI functions through
+    ctypes without argtypes/restype, so ctypes treats the HDEVINFO handle as a
+    32-bit int. On 64-bit Python the handle gets truncated and EnumDevices()
+    fails with "API Error 6: The handle is invalid". Declare the real
+    signatures (ctypes caches the function objects, so this fixes their calls
+    too). HDEVINFO is declared as c_ssize_t so INVALID_HANDLE_VALUE stays -1,
+    which is what their code compares against."""
+    import ctypes
+    from ctypes import wintypes
+    import OsLibrary_Windows as osl
+    sa = osl.setupapi
+    H, P, D, B = ctypes.c_ssize_t, ctypes.c_void_p, wintypes.DWORD, wintypes.BOOL
+    sigs = {
+        "SetupDiGetClassDevsW":              (H, [P, P, P, D]),
+        "SetupDiCreateDeviceInfoList":       (H, [P, P]),
+        "SetupDiDestroyDeviceInfoList":      (B, [H]),
+        "SetupDiEnumDeviceInterfaces":       (B, [H, P, P, D, P]),
+        "SetupDiGetDeviceInterfaceDetailW":  (B, [H, P, P, D, P, P]),
+        "SetupDiGetDeviceRegistryPropertyW": (B, [H, P, D, P, P, D, P]),
+        "SetupDiGetDevicePropertyW":         (B, [H, P, P, P, P, D, P, D]),
+        "SetupDiOpenDeviceInfoW":            (B, [H, P, P, D, P]),
+    }
+    for name, (restype, argtypes) in sigs.items():
+        fn = getattr(sa, name)
+        fn.restype = restype
+        fn.argtypes = argtypes
+
+
+# ElmuSoft's Candlelight classes, bundled next to this script.
+ELMUE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "elmue")
+
+
+def _load_elmue():
+    elmue_dir = ELMUE_DIR
+    if not os.path.isfile(os.path.join(elmue_dir, "Candlelight.py")):
+        raise SystemExit(
+            "ElmuSoft's Candlelight.py not found in %s\n"
+            "It should be bundled in tools/can_test/elmue (see elmue/README.md).\n"
+            "Upstream: 'SampleApplication Python/Source' of\n"
+            "https://github.com/Elmue/CANable-2.5-firmware-Slcan-and-Candlelight" % elmue_dir)
+    if elmue_dir not in sys.path:
+        sys.path.insert(0, elmue_dir)
+    import Candlelight as cl  # noqa: E402  (ElmuSoft, BSD-3)
+    if sys.platform == "win32":
+        _fix_elmue_setupapi_types()
+    return cl
+
+
+def list_elmue_devices():
+    """Descriptions of the connected Candlelight 2.5 adapters, in --device index order."""
+    cl = _load_elmue()
+    devs = cl.Candlelight().EnumDevices(True)
+    return ["%s | %s | %s" % (d.ms_Product, d.ms_Interface, d.ms_SerialNo or "no serial") for d in devs]
+
+
+def list_pycan_channels(interface):
+    """Channels python-can can find for an interface (COM ports for slcan)."""
+    chans = []
+    try:
+        import can
+        for cfg in can.detect_available_configs(interfaces=[interface]):
+            ch = str(cfg.get("channel", ""))
+            if ch and ch not in chans:
+                chans.append(ch)
+    except Exception:
+        pass
+    if not chans and interface in ("slcan", "serial", "robotell", "seeedstudio"):
+        try:
+            from serial.tools import list_ports
+            chans = [p.device for p in list_ports.comports()]
+        except Exception:
+            pass
+    return chans
+
+
+class ElmueBus:
+    """Candlelight adapter with ElmuSoft CANable 2.5 firmware, via ElmuSoft's Python classes."""
+
+    def __init__(self, device_index=0, settings=None):
+        settings = settings or CanSettings()
+        cl = _load_elmue()
+        self.cl = cl
+
+        self.candle = cl.Candlelight()
+        devices = self.candle.EnumDevices(True)
+        if not devices:
+            raise SystemExit("No Candlelight 2.5 adapter found (is HUD ECU Hacker or another tool holding it?).")
+        if device_index >= len(devices):
+            raise SystemExit("Adapter %d selected but only %d found." % (device_index, len(devices)))
+        self.candle.Open(devices[device_index])
+        for detail in self.candle.GetDetails():
+            info("  " + detail.Format(22))
+
+        dev = self.candle.GetDeviceInfo()
+        clk = dev.mk_Capability.fclk_can
+        if settings.fd:
+            if not dev.mb_SupportsFD:
+                self.candle.Close()
+                raise SystemExit("This adapter does not support CAN FD.")
+            nom, data = calc_timing_fd(clk, settings, dev.mk_CapabilityFD.time_nom, dev.mk_CapabilityFD.time_data)
+        else:
+            nom, data = calc_timing(clk, settings.bitrate, settings.sample_point, dev.mk_Capability.time), None
+
+        for name, t, rate, sp in (("nominal", nom, settings.bitrate, settings.sample_point),
+                                  ("data", data, settings.data_bitrate, settings.data_sample_point)):
+            if name == "data" and not settings.fd:
+                continue
+            if t is None:
+                self.candle.Close()
+                raise SystemExit("Can't make an exact %s %s from the %d MHz CAN clock."
+                                 % (name, fmt_bitrate(rate), clk // 1_000_000))
+            if abs(t[3] - sp) > 1.0:
+                warn("  %s sample point %.1f %% requested, nearest possible is %.1f %%" % (name, sp, t[3]))
+
+        self.timing_text = self.candle.SetBitrate(False, *nom[:3])
+        info("  %s  (BRP %d, Seg1 %d, Seg2 %d)" % ((self.timing_text,) + tuple(nom[:3])))
+        if data:
+            t = self.candle.SetBitrate(True, *data[:3])
+            info("  %s  (BRP %d, Seg1 %d, Seg2 %d)" % ((t,) + tuple(data[:3])))
+            self.timing_text += "; " + t
+        self.candle.Start(cl.eDeviceFlags.GS_DevFlagNone)  # normal mode: ACKs frames, auto-retransmit
+        self.adapter_errors = 0
+        self._last_err_print = 0.0
+
+    def send(self, can_id, data):
+        p = self.cl.kCanPacket()
+        p.mu32_ID = can_id
+        p.mu8_Data = bytearray(data)
+        self.candle.SendPacket(p)
+
+    def recv(self, timeout_s):
+        r = self.candle.ReceiveData(max(1, int(timeout_s * 1000)))
+        if r is None:
+            return None
+        if r.mk_RxFrame is not None:
+            p = self.candle.RxFrameToCanPacket(r)
+            if p.mb_29bit:
+                return None
+            return p.mu32_ID, bytes(p.mu8_Data)
+        if r.mk_Error is not None:
+            self.adapter_errors += 1
+            now = time.monotonic()
+            if now - self._last_err_print > 1.0:
+                self._last_err_print = now
+                msg = self.candle.FormatCanErrors(r)[0]
+                warn("  [adapter] CAN error: %s" % msg)
+        return None
+
+    def close(self):
+        if sys.platform == "win32":
+            self._stop_pipe_thread()
+        try:
+            self.candle.Close()
+        except Exception:
+            pass
+
+    def _stop_pipe_thread(self):
+        """Work around a use-after-free in ElmuSoft's OsLibrary_Windows.Close().
+
+        Their _PipeThread keeps an overlapped WinUsb_ReadPipe() pending, with
+        the OVERLAPPED struct as a local of the thread. Close() just wakes the
+        thread and lets it exit with the read still pending, then WinUsb_Free()
+        cancels it and Windows writes the result into the freed struct: the
+        process dies with an access violation, usually on the next open or a
+        little later (seen as the GUI closing itself on Disconnect).
+
+        Fix: ask the thread to stop, then cancel the pending read with
+        WinUsb_AbortPipe() WHILE the thread (and its OVERLAPPED) still exist.
+        The read completes as aborted, the thread wakes, sees the stop flag and
+        exits with nothing pending. Repeated in case the thread had just
+        started a new read."""
+        try:
+            import ctypes
+            import OsLibrary_Windows as osl
+            lib = self.candle.mi_OsLibrary
+            abort = osl.winusb.WinUsb_AbortPipe
+            abort.argtypes = [ctypes.c_void_p, ctypes.c_ubyte]
+            abort.restype = ctypes.c_int
+            end = time.monotonic() + 1.0
+            while lib.mb_ThreadRuns and lib.mh_WinUsb and time.monotonic() < end:
+                lib.mb_AbortThread = True
+                abort(lib.mh_WinUsb, lib.mk_Info.mu8_EndpointIN)
+                time.sleep(0.01)
+        except Exception as ex:
+            warn("  [adapter] could not stop the USB receive thread cleanly: %s" % ex)
+
+
+class PyCanBus:
+    """Any python-can interface (slcan COM port, socketcan, gs_usb, pcan, ...)."""
+
+    def __init__(self, interface, channel, settings=None):
+        settings = settings or CanSettings()
+        try:
+            import can
+        except ImportError:
+            raise SystemExit("python-can is not installed: pip install python-can")
+        kwargs = {"interface": interface, "channel": channel}
+        if interface != "socketcan":            # socketcan: set with `ip link` beforehand
+            kwargs["bitrate"] = settings.bitrate
+        if settings.fd:
+            kwargs["fd"] = True
+            if interface != "socketcan":
+                kwargs["data_bitrate"] = settings.data_bitrate
+        warn("  python-can: sample point is not set by this tool (the interface's default is used).")
+        self.bus = can.Bus(**kwargs)
+        self.can = can
+        self.timing_text = settings.describe()
+        self.adapter_errors = 0
+
+    def send(self, can_id, data):
+        self.bus.send(self.can.Message(arbitration_id=can_id, data=bytes(data), is_extended_id=False))
+
+    def recv(self, timeout_s):
+        msg = self.bus.recv(timeout_s)
+        if msg is None:
+            return None
+        if msg.is_error_frame:
+            self.adapter_errors += 1
+            return None
+        if msg.is_extended_id or msg.is_remote_frame:
+            return None
+        return msg.arbitration_id, bytes(msg.data)
+
+    def close(self):
+        try:
+            self.bus.shutdown()
+        except Exception:
+            pass
+
+
+# ----------------------------------------------------------------------------
+# Driver session: sends commands on a fixed interval and tracks telemetry
+# ----------------------------------------------------------------------------
+
+class Aborted(Exception):
+    pass
+
+
+class Driver:
+    def __init__(self, bus, side, interval_ms, verbose):
+        self.bus = bus
+        self.cmd_id, self.tele_id, self.offset = SIDES[side]
+        self.interval = interval_ms / 1000.0
+        self.verbose = verbose
+
+        self.last_state = None
+        self.last_flags = 0
+        self.last_vel = 0.0
+        self.last_status_time = None
+        self.start_reply = None
+        self.errors = []
+        self.drv_fault_seen = False
+        self.tx_failures = 0
+        self._last_tx_fail_print = 0.0
+        self.should_abort = None  # optional callable; run() raises Aborted when it returns True
+        self.reset_window()
+
+    # --- tracking ---
+
+    def reset_window(self):
+        self.flags_seen = 0
+        self.status_count = 0
+        self.vel_count = 0
+        self.vel_sum = 0.0
+
+    def vel_avg(self):
+        return self.vel_sum / self.vel_count if self.vel_count else 0.0
+
+    def _process(self, can_id, data):
+        if self.verbose:
+            text = decode(can_id, data)
+            if text:
+                emit("  rx 0x%03X  %s" % (can_id, text), "dim")
+        if can_id != self.tele_id or not data:
+            return
+        cmd = data[0]
+        if cmd == CMD_DRIVER_STATUS and len(data) >= 3:
+            self.last_state, self.last_flags = data[1], data[2]
+            self.flags_seen |= data[2]
+            self.status_count += 1
+            self.last_status_time = time.monotonic()
+            if data[2] & FLAG_DRV_FAULT:
+                self.drv_fault_seen = True
+        elif cmd == CMD_SHAFT_VELOCITY and len(data) >= 5:
+            self.last_vel = be_float(data, 1)
+            self.vel_sum += self.last_vel
+            self.vel_count += 1
+        elif cmd == CMD_START_FOC and len(data) >= 5:
+            self.start_reply = be_float(data, 1)
+        elif cmd == CMD_ERROR and len(data) >= 5:
+            code = int(be_float(data, 1))
+            self.errors.append(code)
+            error("  driver reported error %d (%s)" % (code, ERROR_NAMES.get(code, "unknown")))
+
+    # --- sending ---
+
+    def _send(self, can_id, data):
+        try:
+            self.bus.send(can_id, data)
+        except Exception as ex:  # e.g. adapter Tx buffer full while the bus is down
+            self.tx_failures += 1
+            now = time.monotonic()
+            if now - self._last_tx_fail_print > 1.0:
+                self._last_tx_fail_print = now
+                warn("  [adapter] send failed: %s" % ex)
+
+    def send_start(self):
+        self._send(self.cmd_id, bytes([CMD_START_FOC]))
+
+    def send_current(self, mine, other=0.0, mode="normal"):
+        if mode == "short":
+            data = struct.pack(">f", mine)  # 4 bytes: must be ignored by the driver
+        else:
+            buf = bytearray(8)
+            buf[self.offset:self.offset + 4] = struct.pack(">f", math.nan if mode == "nan" else mine)
+            buf[4 - self.offset:8 - self.offset] = struct.pack(">f", other)
+            data = bytes(buf)
+        self._send(BOTH_MOTOR_ID, data)
+
+    def run(self, seconds, mine=0.0, other=0.0, mode="normal", until=None):
+        """Send the command every interval (mode 'none' sends nothing) and
+        process received frames for `seconds`. Returns True if `until()`
+        became true first."""
+        now = time.monotonic()
+        end = now + seconds
+        next_tx = now
+        while now < end:
+            if self.should_abort is not None and self.should_abort():
+                raise Aborted()
+            if mode != "none" and now >= next_tx:
+                self.send_current(mine, other, mode)
+                next_tx += self.interval
+                if next_tx < now:
+                    next_tx = now + self.interval
+            frame = self.bus.recv(0.001)
+            if frame is not None:
+                self._process(*frame)
+            if until is not None and until():
+                return True
+            now = time.monotonic()
+        return False
+
+    def start_foc(self, timeout_s=START_TIMEOUT_S):
+        """Returns (ok, seconds) - ok is None if no reply arrived."""
+        self.start_reply = None
+        t0 = time.monotonic()
+        self.send_start()
+        self.run(timeout_s, mode="none", until=lambda: self.start_reply is not None)
+        dt = time.monotonic() - t0
+        if self.start_reply is None:
+            return None, dt
+        return self.start_reply == 1.0, dt
+
+
+# ----------------------------------------------------------------------------
+# Results
+# ----------------------------------------------------------------------------
+
+class Results:
+    def __init__(self):
+        self.passed = 0
+        self.failed = 0
+
+    def check(self, ok, name, detail=""):
+        if ok:
+            self.passed += 1
+            emit("PASS  %s - %s" % (name, detail), "pass")
+        else:
+            self.failed += 1
+            emit("FAIL  %s - %s" % (name, detail), "fail")
+        return ok
+
+    def summary(self):
+        text = "==== %d passed, %d failed ====" % (self.passed, self.failed)
+        emit(text, "pass" if self.failed == 0 else "fail")
+        return self.failed == 0
+
+
+def start_or_fail(drv, res, name="Start FOC"):
+    info("Sending START_FOC, waiting up to %.0f s (the driver sends nothing while it aligns)..." % START_TIMEOUT_S)
+    n_err = len(drv.errors)
+    ok, dt = drv.start_foc()
+    if ok is None:
+        return res.check(False, name, "no reply within %.0f s" % START_TIMEOUT_S)
+    detail = "reply %s after %.1f s" % ("OK" if ok else "FAILED", dt)
+    if not ok and len(drv.errors) > n_err:
+        code = drv.errors[-1]
+        detail += ", error %d (%s)" % (code, ERROR_NAMES.get(code, "unknown"))
+    return res.check(ok, name, detail)
+
+
+# ----------------------------------------------------------------------------
+# Commands
+# ----------------------------------------------------------------------------
+
+def cmd_auto(drv, args):
+    res = Results()
+    I = abs(args.current) if abs(args.current) >= 0.05 else 0.3
+
+    # 1. Heartbeat
+    drv.reset_window()
+    drv.run(1.0, mode="none")
+    if drv.status_count == 0:
+        res.check(False, "Status heartbeat",
+                  "nothing received on 0x%03X. Check the side setting (`config` on serial), bitrate, "
+                  "termination, GND, and that nothing else holds the adapter." % drv.tele_id)
+        return res.summary()
+    res.check(8 <= drv.status_count <= 12, "Status heartbeat", "%d frames in 1 s (expect 10)" % drv.status_count)
+    info("Driver state: %s, flags: %s" % (state_name(drv.last_state), flag_names(drv.last_flags)))
+
+    # 2. Start FOC
+    if not start_or_fail(drv, res):
+        return res.summary()
+    drv.reset_window()
+    drv.run(0.3, mode="none")
+    res.check(drv.last_state == STATE_RUNNING, "State is running after start", state_name(drv.last_state))
+    res.check(drv.flags_seen & FLAG_TIMEOUT, "Timeout flag set while no commands are sent", flag_names(drv.flags_seen))
+    if drv.last_flags & FLAG_CALIBRATION:
+        info("  (stored alignment used)")
+
+    # 3. Zero current clears the timeout, velocity telemetry rate
+    drv.reset_window()
+    drv.run(1.0, 0.0)
+    res.check(not drv.last_flags & FLAG_TIMEOUT, "Current commands clear the timeout flag", flag_names(drv.last_flags))
+    res.check(80 <= drv.vel_count <= 110, "Velocity telemetry rate", "%d frames in 1 s (expect ~100)" % drv.vel_count)
+
+    # 4./5. Direction
+    for sign, name in ((1, "Positive current spins forward"), (-1, "Negative current spins backward")):
+        drv.run(2.0, sign * I)
+        drv.reset_window()
+        drv.run(1.0, sign * I)
+        v = drv.vel_avg()
+        res.check(sign * v > 2.0, name, "%+.2f A -> mean %+.2f rad/s (expect %s2)" % (sign * I, v, ">+" if sign > 0 else "<-"))
+
+    # 6. Other motor's half of 0x020 is ignored
+    drv.run(3.0, 0.0)  # coast
+    v0 = abs(drv.last_vel)
+    drv.run(2.0, 0.0, I)
+    v1 = abs(drv.last_vel)
+    res.check(v1 <= v0 + 1.0, "Other motor's half of 0x020 is ignored",
+              "|vel| %.2f -> %.2f rad/s while %.2f A sent to the other side" % (v0, v1, I))
+
+    # 7. Command timeout while spinning
+    drv.run(2.0, I)
+    drv.reset_window()
+    drv.run(0.4, mode="none")
+    res.check(drv.flags_seen & FLAG_TIMEOUT, "Command timeout after 400 ms of silence", flag_names(drv.flags_seen))
+    drv.reset_window()
+    drv.run(0.5, 0.0)
+    res.check(not drv.last_flags & FLAG_TIMEOUT, "Timeout clears when commands resume", flag_names(drv.last_flags))
+
+    # 8. Short frames, 9. NaN
+    for mode, name in (("short", "4-byte 0x020 frames are ignored"), ("nan", "NaN current is ignored")):
+        drv.reset_window()
+        drv.run(0.4, 0.0, mode=mode)
+        res.check(drv.flags_seen & FLAG_TIMEOUT, name, flag_names(drv.flags_seen))
+        drv.run(0.5, 0.0)
+
+    # 10. START_FOC while running replies at once
+    drv.start_reply = None
+    t0 = time.monotonic()
+    drv.send_start()
+    drv.run(1.0, 0.0, until=lambda: drv.start_reply is not None)
+    dt = time.monotonic() - t0
+    res.check(drv.start_reply == 1.0 and dt < 0.2, "START_FOC while running replies immediately",
+              ("no reply" if drv.start_reply is None else "reply %.1f" % drv.start_reply) + " after %d ms" % (dt * 1000))
+
+    # 11. Whole run
+    res.check(not drv.errors, "No CMD_ERROR frames during the test", "%d received" % len(drv.errors))
+    res.check(not drv.drv_fault_seen, "No DRV8316 fault flag during the test", "seen" if drv.drv_fault_seen else "none")
+    res.check(drv.bus.adapter_errors == 0, "No CAN bus errors reported by the adapter", "%d reported" % drv.bus.adapter_errors)
+
+    drv.run(0.3, 0.0)
+    return res.summary()
+
+
+def ensure_running(drv):
+    drv.reset_window()
+    drv.run(0.3, mode="none")
+    if drv.last_state == STATE_RUNNING:
+        return True
+    if drv.last_state is None:
+        error("No status from the driver on 0x%03X." % drv.tele_id)
+        return False
+    return start_or_fail(drv, Results())
+
+
+def cmd_run(drv, args):
+    if not ensure_running(drv):
+        return False
+    info("Sending %.3f A every %d ms. Ctrl+C to stop." % (args.current, args.interval))
+    while True:
+        drv.reset_window()
+        drv.run(1.0, args.current)
+        info("vel %+7.2f rad/s (%3d frames/s)  state %s  flags %s" %
+             (drv.vel_avg(), drv.vel_count, state_name(drv.last_state), flag_names(drv.last_flags)))
+
+
+def cmd_monitor(bus, args):
+    info("Monitoring. Ctrl+C to stop.")
+    counts = {}
+    last_print = time.monotonic()
+    while True:
+        frame = bus.recv(0.05)
+        if frame is not None:
+            can_id, data = frame
+            text = decode(can_id, data)
+            # Velocity is ~100 Hz: summarise it unless --verbose.
+            if text and (args.verbose or "velocity" not in text):
+                info("%10.3f  0x%03X  %-24s %s" % (time.monotonic(), can_id, data.hex(" "), text))
+            elif text:
+                counts[can_id] = counts.get(can_id, 0) + 1
+            elif args.verbose:
+                info("%10.3f  0x%03X  %s" % (time.monotonic(), can_id, data.hex(" ")))
+        now = time.monotonic()
+        if counts and now - last_print >= 5.0:
+            info("  (velocity frames in the last %.0f s: %s)" %
+                 (now - last_print, ", ".join("0x%03X: %d" % kv for kv in sorted(counts.items()))))
+            counts.clear()
+            last_print = now
+
+
+def cmd_busoff(drv, args):
+    res = Results()
+    if not ensure_running(drv):
+        return False
+    I = args.current if abs(args.current) >= 0.05 else 0.3
+    drv.run(1.5, I)
+    emit("Now UNPLUG the CAN cable for 2-5 s, then plug it back in. (waiting up to 60 s)", "prompt")
+
+    # Wait for the status heartbeat to stop...
+    lost = drv.run(60.0, I, until=lambda: time.monotonic() - (drv.last_status_time or time.monotonic()) > 0.5)
+    if not res.check(lost, "Cable unplugged (heartbeat stopped)", "detected" if lost else "no gap within 60 s"):
+        return res.summary()
+    t_lost = time.monotonic()
+
+    # ...and come back.
+    drv.reset_window()
+    back = drv.run(60.0, I, until=lambda: drv.status_count > 0)
+    if not res.check(back, "Driver back on the bus", "after %.1f s" % (time.monotonic() - t_lost) if back
+                     else "nothing within 60 s - did it reset into DFU? (CAN_RX is BOOT0)"):
+        return res.summary()
+
+    drv.reset_window()
+    drv.run(1.0, I)
+    res.check(drv.last_state == STATE_RUNNING, "Still running (no reset)", state_name(drv.last_state))
+    res.check(not drv.last_flags & FLAG_TIMEOUT, "Commands accepted again", flag_names(drv.last_flags))
+    res.check(drv.vel_count >= 80, "Velocity telemetry resumed", "%d frames in 1 s" % drv.vel_count)
+    info("Check the serial log: it should show 'No current command for 100 ms - applying 0 A' while unplugged,")
+    info("and 'CAN bus-off - attempting recovery' / 'CAN bus recovered' if the driver went bus-off.")
+    drv.run(0.3, 0.0)
+    return res.summary()
+
+
+# ----------------------------------------------------------------------------
+
+def add_bus_args(ap, here):
+    g = ap.add_argument_group("adapter")
+    g.add_argument("--backend", choices=["elmue", "python-can"], default="elmue")
+    g.add_argument("--device", type=int, default=0, help="adapter index from `list` (elmue backend)")
+    g.add_argument("--interface", default="slcan", help="python-can interface (default slcan)")
+    g.add_argument("--channel", help="python-can channel, e.g. COM5 or can0")
+    b = ap.add_argument_group("bit timing (the MiniFOC firmware uses 1M @ 87.5 %, classic)")
+    b.add_argument("--bitrate", type=parse_bitrate, default=DRIVER_BITRATE, help="nominal bitrate, e.g. 1M, 500k")
+    b.add_argument("--sample-point", type=float, default=DRIVER_SAMPLE_POINT,
+                   help="nominal sample point %% (default 87.5)")
+    b.add_argument("--fd", action="store_true", help="enable CAN FD (data phase bitrate)")
+    b.add_argument("--data-bitrate", type=parse_bitrate, default=2_000_000, help="CAN FD data bitrate (default 2M)")
+    b.add_argument("--data-sample-point", type=float, default=75.0, help="CAN FD data sample point %% (default 75)")
+
+
+def settings_from_args(args):
+    return CanSettings(args.bitrate, args.sample_point, args.fd, args.data_bitrate, args.data_sample_point)
+
+
+def open_bus(args, settings):
+    if args.backend == "elmue":
+        return ElmueBus(args.device, settings)
+    if not args.channel:
+        raise SystemExit("--channel is required with --backend python-can")
+    return PyCanBus(args.interface, args.channel, settings)
+
+
+def main():
+    here = os.path.dirname(os.path.abspath(__file__))
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("command", choices=["auto", "monitor", "run", "busoff", "list"])
+    ap.add_argument("--side", choices=["left", "right"], default="left", help="which driver to talk to (default left)")
+    ap.add_argument("--current", type=float, default=0.3, help="current in A for run/auto/busoff (default 0.3)")
+    ap.add_argument("--interval", type=int, default=10, help="command interval in ms, 1..90 (default 10)")
+    ap.add_argument("-v", "--verbose", action="store_true", help="print every decoded frame")
+    add_bus_args(ap, here)
+    args = ap.parse_args()
+
+    if not 1 <= args.interval <= 90:
+        ap.error("--interval must be 1..90 ms (the driver's command timeout is 100 ms)")
+    if abs(args.current) > 5:
+        ap.error("--current must be within +-5 A (the firmware clamps to 2 A)")
+
+    if args.command == "list":
+        if args.backend == "elmue":
+            devs = list_elmue_devices()
+            info("Candlelight 2.5 adapters (use --device N):" if devs else "No Candlelight 2.5 adapter found.")
+            for i, d in enumerate(devs):
+                info("  %d: %s" % (i, d))
+        else:
+            chans = list_pycan_channels(args.interface)
+            info("python-can '%s' channels: %s" % (args.interface, ", ".join(chans) if chans else "none found"))
+        return
+
+    settings = settings_from_args(args)
+    settings.warn_if_not_driver()
+    bus = open_bus(args, settings)
+
+    drv = Driver(bus, args.side, args.interval, args.verbose)
+    info("MiniFOC %s: commands 0x%03X, telemetry 0x%03X" % (args.side, drv.cmd_id, drv.tele_id))
+    ok = True
+    try:
+        if args.command == "auto":
+            ok = cmd_auto(drv, args)
+        elif args.command == "run":
+            ok = cmd_run(drv, args)
+        elif args.command == "busoff":
+            ok = cmd_busoff(drv, args)
+        else:
+            cmd_monitor(bus, args)
+    except KeyboardInterrupt:
+        info("Stopped.")
+    finally:
+        if args.command != "monitor":
+            try:
+                drv.send_current(0.0)  # leave the motor at 0 A
+            except Exception:
+                pass
+        bus.close()
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    main()

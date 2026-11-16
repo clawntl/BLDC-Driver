@@ -32,7 +32,27 @@ It's the successor to [BLDC-Driver](https://github.com/clawntl/BLDC-Driver). The
 | [`Hardware/production/`](Hardware/production) | Fabrication outputs: Gerber zip, BOM and pick-and-place files (JLCPCB/LCSC part numbers) |
 | [`schematic.pdf`](schematic.pdf) | PDF export of the schematic |
 | [`Images/`](Images) | Board renders |
-| `Firmware/` | Not published yet |
+| [`Firmware/`](Firmware) | PlatformIO firmware: the CAN motor driver (`driver`) and a bench-test build (`motor_test`) |
+
+## Firmware
+
+The firmware is ported from [BLDC-Driver](https://github.com/clawntl/BLDC-Driver/tree/main/Firmware) and uses the same CAN protocol, serial console and board settings, so the docs there ([firmware guide](https://github.com/clawntl/BLDC-Driver/blob/main/docs/firmware.md), [CAN protocol](https://github.com/clawntl/BLDC-Driver/blob/main/docs/can-protocol.md), [test routines](https://github.com/clawntl/BLDC-Driver/blob/main/docs/test-routines.md)) still apply. The differences on Mk2 are:
+
+- **Pins:** new mapping in [`Firmware/include/pins.h`](Firmware/include/pins.h). The user LED is on PB2.
+- **Encoder:** AS5047P instead of AS5048A.
+- **Current sense:** SimpleFOC `InlineCurrentSense` (3 mΩ shunts, INA241A3 at 50 V/V) instead of the DRV8316's low-side amplifiers.
+- **Supply voltage:** read from the INA226 over I²C instead of an ADC divider. The `config` console command also shows the live supply voltage and current.
+- **DRV8316 buck:** switched off, because 5 V comes from the AP63205.
+- **CAN transceiver:** its VIO pin is powered from PC13, so the firmware turns it on at boot.
+- **No DFU button GPIO:** BOOT is wired straight to BOOT0/CAN_RX. To enter DFU, hold BOOT and press RST, or type `dfu` in the serial console.
+
+Build and flash from `Firmware/`:
+
+```bash
+pio run -e driver -t upload
+```
+
+Then configure the board over USB serial (`set side left|right`, `save`), the same as on BLDC-Driver.
 
 ## Known issues
 
@@ -41,3 +61,7 @@ This is hardware revision **Rev 01** (Mk2). Known problems will be listed here a
 ## License
 
 This project is shared under the terms of the [GNU Affero General Public License Version 3](LICENSE) as published by the Free Software Foundation.
+
+The bundled [`ACANFD_STM32_G431`](Firmware/lib/ACANFD_STM32_G431) library is a stripped-down fork of Pierre Molinaro's [ACANFD-STM32](https://github.com/pierremolinaro/acanfd-stm32) and keeps its own MIT license.
+
+The CAN test tool bundles ElmüSoft's Candlelight Python classes in [`Firmware/tools/can_test/elmue`](Firmware/tools/can_test/elmue), unmodified, under their own BSD 3-Clause license.
