@@ -172,9 +172,9 @@ ERROR_NAMES = {
 # CMD_GET_BOARD_INFO capability bits (protocol 4+). The tools decide what to
 # show from these, never from the model name, so a new board needs no changes
 # here. Unknown bits are shown as numbers.
-CAP_SUPPLY_VOLTAGE = 1 << 0   # heartbeat supply mV is a measurement
-CAP_INPUT_CURRENT  = 1 << 1   # heartbeat bytes 5-6: input current, int16 mA
-CAP_NAMES = {CAP_SUPPLY_VOLTAGE: "supply voltage", CAP_INPUT_CURRENT: "input current"}
+CAP_MEASURES_SUPPLY_VOLTAGE = 1 << 0   # heartbeat supply mV is a measurement
+CAP_MEASURES_INPUT_CURRENT  = 1 << 1   # heartbeat bytes 5-6: input current, int16 mA
+CAP_NAMES = {CAP_MEASURES_SUPPLY_VOLTAGE: "supply voltage", CAP_MEASURES_INPUT_CURRENT: "input current"}
 
 
 def cap_names(caps):
@@ -211,11 +211,57 @@ def status_millivolts(data):
 
 def status_milliamps(data):
     """Input mA from a CMD_DRIVER_STATUS frame, or None (no reading, or a board
-    without CAP_INPUT_CURRENT, which sends 5 bytes)."""
+    without CAP_MEASURES_INPUT_CURRENT, which sends 5 bytes)."""
     if len(data) < 7:
         return None
     ma = int.from_bytes(bytes(data[5:7]), "big", signed=True)
     return None if ma == -32768 else ma
+
+
+def fmt_input(mv, ma, places=3):
+    """Input current and power from the heartbeat, e.g. "0.520 A, 12.5 W" (power
+    = supply voltage x input current, negative while the motor regenerates).
+    "" on a board that doesn't report the current (ma None)."""
+    if ma is None:
+        return ""
+    text = "%.*f A" % (places, ma / 1000)
+    if mv:
+        text += ", %.1f W" % (mv * ma / 1e6)
+    return text
+
+
+class BoardInfoJoiner:
+    """Joins the CMD_GET_BOARD_INFO replies seen on the bus into one line per
+    board, for logs that show replies as they arrive. Page 0 (capabilities,
+    hardware rev) is held until the model name is complete: a page containing a
+    NUL, or page 5. Name pages after that (a host may ask for all five at once)
+    show nothing. Keyed by anything that identifies the board (node, side)."""
+
+    def __init__(self):
+        self._page0 = {}   # key -> page 0 reply
+        self._name = {}    # key -> name bytes so far (absent = not reading a name)
+
+    def feed(self, key, data):
+        """The line to show for this reply, or "" for nothing (yet)."""
+        if len(data) < 8:
+            return ""
+        page = data[1]
+        if page == 0:
+            self._page0[key] = bytes(data)
+            return ""
+        if page == 1:
+            self._name[key] = b""
+        elif key not in self._name:
+            return ""
+        chunk = bytes(data[2:8])
+        self._name[key] += chunk.split(b"\0")[0]
+        if b"\0" not in chunk and page < 5:
+            return ""
+        text = "board %r" % self._name.pop(key).decode("ascii", "replace")
+        p0 = self._page0.pop(key, None)
+        if p0:
+            text += ", hardware rev %d, capabilities: %s" % (p0[6], cap_names(int.from_bytes(p0[2:6], "big")))
+        return text
 
 
 def fmt_amps(v):
@@ -269,7 +315,7 @@ def decode(can_id, data):
             mv, ma = status_millivolts(d), status_milliamps(d)
             return "node %d status   %s, flags %s, supply %s%s" % (
                 n, state_name(d[1]), flag_names(d[2]), "%.2f V" % (mv / 1000) if mv else "-",
-                ", %.3f A in" % (ma / 1000) if ma is not None else "")
+                ", input " + fmt_input(mv, ma) if ma is not None else "")
         if c == CMD_SHAFT_VELOCITY and len(d) >= 5:
             return "node %d velocity %.2f rad/s" % (n, be_float(d, 1))
         if c == CMD_START_FOC and len(d) >= 5:
@@ -1161,7 +1207,7 @@ def cmd_info(drv, args):
     info("Node %d: state %s, flags %s, supply %s%s" % (
         drv.node, state_name(drv.last_state), flag_names(drv.last_flags),
         "%.2f V" % (mv / 1000) if mv else "no reading",
-        ", input %.3f A" % (drv.last_ma / 1000) if drv.last_ma is not None else ""))
+        ", input " + fmt_input(mv, drv.last_ma) if drv.last_ma is not None else ""))
     reply = drv.request([CMD_GET_INFO])
     if reply is None:
         warn("No CMD_GET_INFO reply: firmware 1.0 (no configuration over CAN).")

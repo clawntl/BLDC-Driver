@@ -12,7 +12,7 @@ MiniFOC is a round, motor-mounted version of BLDC-Driver: the same **STM32G431**
 | Schematic | [`schematic.pdf`](../../Hardware/minifoc_mk2/schematic.pdf) |
 | Firmware environments | `minifoc_mk2`, `minifoc_mk2_test` |
 | Board config | [`Firmware/boards/minifoc_mk2/board_config.h`](../../Firmware/boards/minifoc_mk2/board_config.h) |
-| Reported over CAN | Model "MiniFOC Mk2", hardware rev 2, capabilities `CAP_SUPPLY_VOLTAGE`, `CAP_INPUT_CURRENT` |
+| Reported over CAN | Model "MiniFOC Mk2", hardware rev 2, capabilities `CAP_MEASURES_SUPPLY_VOLTAGE`, `CAP_MEASURES_INPUT_CURRENT` |
 
 ## Features
 
@@ -94,7 +94,7 @@ As on BLDC-Driver, the firmware drives both SPI1 chip selects high before any SP
 The firmware is the same as on every other board; only [`board_config.h`](../../Firmware/boards/minifoc_mk2/board_config.h) differs. What that means on MiniFOC:
 
 - **Current sense:** SimpleFOC `InlineCurrentSense` with the 3 mΩ shunts and 50 V/V INA241A3 amplifiers. Offsets are calibrated with the power stage off; expect about 1.65 V at zero current (`cs` in `motor_test`).
-- **Supply:** the INA226 provides the supply voltage, both at boot (PWM scaling) and every 100 ms for the CAN heartbeat. It averages in hardware, so there is no software filter. It also measures input current, which the board reports in the heartbeat (`CAP_INPUT_CURRENT`) and on the `config` console command.
+- **Supply:** the INA226 provides the supply voltage, both at boot (PWM scaling) and every 100 ms for the CAN heartbeat. It averages in hardware, so there is no software filter. It also measures input current, which the board reports in the heartbeat (`CAP_MEASURES_INPUT_CURRENT`) and on the `config` console command.
 - **DRV8316 buck:** switched off, because 5 V comes from the AP63205.
 - **CAN transceiver:** powered from PC13, which the firmware drives high at boot and low just before a software reset, so a reset doesn't land in the DFU bootloader.
 

@@ -68,7 +68,7 @@ bool readReg(uint8_t reg, uint16_t &value) {
 
 const char *supplySensorName() { return "INA226"; }
 
-uint32_t supplyCapabilities() { return CAP_SUPPLY_VOLTAGE | CAP_INPUT_CURRENT; }
+uint32_t supplyCapabilities() { return CAP_MEASURES_SUPPLY_VOLTAGE | CAP_MEASURES_INPUT_CURRENT; }
 
 void supplyBegin() {
     Wire.setSDA(I2C1_SDA);

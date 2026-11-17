@@ -161,7 +161,7 @@ Firmware/boards/
 | Supply sensing | V_SENS divider on ADC1 | INA226 on I2C1 (voltage and input current) |
 | 5 V supply | DRV8316 buck | Separate AP63205 (DRV8316 buck off) |
 | DFU button | USER (PB12) | None (BOOT is CAN RX) |
-| Capabilities (`CMD_GET_BOARD_INFO`) | `CAP_SUPPLY_VOLTAGE` | `CAP_SUPPLY_VOLTAGE`, `CAP_INPUT_CURRENT` |
+| Capabilities (`CMD_GET_BOARD_INFO`) | `CAP_MEASURES_SUPPLY_VOLTAGE` | `CAP_MEASURES_SUPPLY_VOLTAGE`, `CAP_MEASURES_INPUT_CURRENT` |
 
 ### Parts
 

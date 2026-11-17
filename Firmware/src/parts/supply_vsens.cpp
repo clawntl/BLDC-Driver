@@ -148,7 +148,7 @@ void sampleRegular(uint32_t now) {
 
 const char *supplySensorName() { return "V_SENS"; }
 
-uint32_t supplyCapabilities() { return CAP_SUPPLY_VOLTAGE; }
+uint32_t supplyCapabilities() { return CAP_MEASURES_SUPPLY_VOLTAGE; }
 
 void supplyBegin() {
     // The first sample (one interval from now) seeds the filter. Not seeded

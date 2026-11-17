@@ -12,8 +12,8 @@
 // The live values go to the host in the CAN status heartbeat
 // (CMD_DRIVER_STATUS, see can_protocol.h).
 
-// CAP_* bits from can_protocol.h this sensor provides (CAP_SUPPLY_VOLTAGE,
-// CAP_INPUT_CURRENT).
+// CAP_* bits from can_protocol.h this sensor provides (CAP_MEASURES_SUPPLY_VOLTAGE,
+// CAP_MEASURES_INPUT_CURRENT).
 uint32_t supplyCapabilities();
 
 // Starts the sensor (may do nothing). Call once from setup(), before setupFOC().

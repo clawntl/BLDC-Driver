@@ -33,7 +33,7 @@ python cantest_gui.py
 3. Choose a mode, then press **Connect**:
    - **Control**: the GUI is the controller, so unplug the robot's controller first. Each panel has **Start FOC**, **Send** and a current slider; **Start both** and **Link sliders** drive both motors together. A panel with **Send** off sends NaN ("no command"), so that board times out to 0 A. **STOP** (or Esc) sends 0 A to both boards and stops sending.
    - **Monitor**: the robot's controller stays on the bus and in charge, and the GUI sends nothing. It shows what the controller commands each node next to that board's state, flags, supply and velocity. **Listen-only** keeps the adapter completely silent; it doesn't even acknowledge frames.
-4. **Info** reads the board's model name, firmware and protocol version. On boards that measure input current (capability `CAP_INPUT_CURRENT`), the current is shown next to the supply voltage.
+4. **Info** reads the board's model name, firmware and protocol version. On boards that measure input current (capability `CAP_MEASURES_INPUT_CURRENT`), the input current and power (supply voltage × input current, negative while the motor regenerates) are shown next to the supply voltage.
 
 **Auto test** and **Bus-off test** run the same sequences as the command line, for one panel at a time.
 

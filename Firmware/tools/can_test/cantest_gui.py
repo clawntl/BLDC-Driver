@@ -18,7 +18,8 @@ picked before connecting:
            to 0 A). STOP (or Esc) sends 0 A to both, stops sending and aborts
            a running test. Auto test / Bus-off test run per side, the same
            sequences as the CLI. "Info" reads the firmware version and the board
-           (model name; input current is shown if the board measures it).
+           (model name; input current and power are shown if the board
+           measures the current).
            "Settings..." changes the board's settings over CAN (node ID,
            invert, alignment, save/revert/reboot; firmware 1.1+).
   Monitor  The robot's controller stays on the bus and in charge; the GUI
@@ -86,6 +87,7 @@ class Worker(threading.Thread):
             d.should_abort = self._should_abort
             d.observers = [self.drv[other_side(s)]._process, self.watch.process, self._log_events]
         self._last_seen = {s: (None, None) for s in SIDES}   # (state, flags) for change logging
+        self._board_info = core.BoardInfoJoiner()            # name pages -> one log line
 
         self.tasks = queue.Queue()
         self.stop_flag = False
@@ -138,6 +140,10 @@ class Worker(threading.Thread):
             elif data[0] == core.CMD_START_FOC and len(data) >= 5:
                 ok = core.be_float(data, 1) == 1.0
                 core.emit("%s: START_FOC reply %s" % (s, "OK" if ok else "FAILED"), "pass" if ok else "fail")
+            elif data[0] == core.CMD_GET_BOARD_INFO:
+                text = self._board_info.feed(s, data)
+                if text:
+                    core.emit("%s (node %d): %s" % (s, d.node, text), "dim")
             else:
                 text = core.decode_reply(data)
                 if text:
@@ -308,8 +314,6 @@ class SidePanel:
         self.lbl_state.pack(side="left", padx=4)
         self.lbl_vel = tk.Label(top, text="- rad/s", width=13, font=("Segoe UI", 16, "bold"), anchor="e")
         self.lbl_vel.pack(side="right", padx=4)
-        self.lbl_volt = tk.Label(top, text="- V", width=15, font=("Segoe UI", 11), anchor="e")
-        self.lbl_volt.pack(side="right", padx=4)
 
         fl = ttk.Frame(f)
         fl.pack(fill="x", padx=4, pady=2)
@@ -319,6 +323,10 @@ class SidePanel:
             lbl = tk.Label(fl, text=name, width=11, relief="groove")
             lbl.pack(side="left", padx=2)
             self.flag_labels[bit] = lbl
+        # Supply readout, sized to its text (packed last, so the flags keep
+        # their space when the window is narrow).
+        self.lbl_volt = tk.Label(fl, text="- V", font=("Segoe UI", 11), anchor="e")
+        self.lbl_volt.pack(side="right", padx=4)
 
         self.lbl_cmd = tk.Label(f, text="commanded: -", anchor="w", font=("Segoe UI", 10, "bold"))
         self.lbl_cmd.pack(fill="x", padx=4)
@@ -1019,8 +1027,18 @@ class App:
         w = self.worker
         now = time.monotonic()
         if w is None:
+            # Not connected: nothing below is known any more, so show the
+            # panels as they start out (not the last values before Disconnect).
             for p in self.panels.values():
                 self._set_label(p.lbl_link, text="not connected", bg="#dddddd")
+                self._set_label(p.lbl_state, text="state: -", bg="#f0f0f0")
+                for lbl in p.flag_labels.values():
+                    self._set_label(lbl, bg="#f0f0f0")
+                self._set_label(p.lbl_vel, text="- rad/s")
+                self._set_label(p.lbl_volt, text="- V")
+                self._set_label(p.lbl_fw, text="")
+                self._set_label(p.lbl_cmd, text="commanded: -")
+                self._set_label(p.lbl_counts, text="")
             self._set_label(self.lbl_bus, text="")
             return
 
@@ -1080,8 +1098,9 @@ class App:
                 self._set_label(lbl, bg=("#f3a6a6" if warn_bit else "#9bc8f0") if on else "#f0f0f0")
             self._set_label(p.lbl_vel, text="%+.2f rad/s" % d.last_vel if fresh else "- rad/s")
             volt = "%.2f V" % (d.last_mv / 1000) if fresh and d.last_mv else "- V"
-            if d.has_cap(core.CAP_INPUT_CURRENT):
-                volt += "  %.2f A" % (d.last_ma / 1000) if fresh and d.last_ma is not None else "  - A"
+            if d.has_cap(core.CAP_MEASURES_INPUT_CURRENT):
+                ok = fresh and d.last_ma is not None
+                volt += "  " + (core.fmt_input(d.last_mv, d.last_ma, 2).replace(", ", "  ") if ok else "- A  - W")
             self._set_label(p.lbl_volt, text=volt)
             fw = ("%s, fw %d.%d.%d, protocol %d" % (
                 d.board_label(), d.info[1], d.info[2], d.info[3], d.info[0]) if d.info else "")

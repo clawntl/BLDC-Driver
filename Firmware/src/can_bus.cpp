@@ -135,13 +135,13 @@ void sendStartResult(bool ok) {
 
 static void sendStatus() {
     // Bytes 3-4: supply voltage in mV, big-endian (0 = no reading yet).
-    // Bytes 5-6 (CAP_INPUT_CURRENT only): input current in mA, int16 big-endian.
+    // Bytes 5-6 (CAP_MEASURES_INPUT_CURRENT only): input current in mA, int16 big-endian.
     const uint16_t mv = supplyMillivolts();
     const uint16_t ma = (uint16_t)supplyMilliamps();
     const uint8_t frame[7] = { CMD_DRIVER_STATUS, driverState(), statusFlags(),
                                (uint8_t)(mv >> 8), (uint8_t)(mv & 0xFF),
                                (uint8_t)(ma >> 8), (uint8_t)(ma & 0xFF) };
-    const uint8_t len = (boardCapabilities() & CAP_INPUT_CURRENT) ? 7 : 5;
+    const uint8_t len = (boardCapabilities() & CAP_MEASURES_INPUT_CURRENT) ? 7 : 5;
     sendFrame(frame, len, telemetryCanId());
 }
 
