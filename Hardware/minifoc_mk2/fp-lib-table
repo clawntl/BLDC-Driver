@@ -1,0 +1,5 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "Driver Mk2")(type "KiCad")(uri "D:/My Drive/@SBR v2/Driver Mk2.pretty")(options "")(descr ""))
+  (lib (name "MotorDriverParts")(type "KiCad")(uri "${KIPRJMOD}/MotorDriverParts.pretty")(options "")(descr ""))
+)
