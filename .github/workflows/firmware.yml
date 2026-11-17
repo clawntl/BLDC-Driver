@@ -1,0 +1,48 @@
+name: Firmware
+
+# Builds every board environment, so a change made for one board can't
+# silently break another.
+
+on:
+  push:
+    paths: ["Firmware/**", ".github/workflows/firmware.yml"]
+  pull_request:
+    paths: ["Firmware/**", ".github/workflows/firmware.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [bldc_driver_v02, bldc_driver_v02_test, minifoc_mk2, minifoc_mk2_test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ hashFiles('Firmware/platformio.ini') }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install platformio
+      - name: Build ${{ matrix.env }}
+        working-directory: Firmware
+        run: pio run -e ${{ matrix.env }}
+      # The settings live in the last 2 KB flash page, so the real firmware
+      # must stay below 126 KB (see docs/firmware.md, "Flash size limit").
+      - name: Size check
+        working-directory: Firmware
+        run: |
+          size=$(stat -c%s .pio/build/${{ matrix.env }}/firmware.bin)
+          echo "firmware.bin: $size bytes"
+          if [[ "${{ matrix.env }}" != *_test && $size -gt 129024 ]]; then
+            echo "::error::Image overlaps the settings flash page (> 126 KB)"; exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.env }}
+          path: Firmware/.pio/build/${{ matrix.env }}/firmware.bin
