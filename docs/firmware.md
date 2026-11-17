@@ -45,7 +45,7 @@ To use an ST-Link on the SWD header instead, switch to `upload_protocol = stlink
 A freshly flashed board is **unconfigured**: CAN stays off, and the LED blinks quickly. Open the serial monitor and run:
 
 ```text
-set side left        # or right. Selects the CAN IDs (see can-protocol.md)
+set node 1           # 1-15. Selects the CAN IDs (see can-protocol.md); `set side left|right` = node 1 / 2
 set invert on|off    # optional
 save                 # write to flash, verify, reboot
 ```
@@ -70,7 +70,8 @@ The console runs at 115200 baud. Lines end in LF or CR, and commands are case-in
 |---|---|
 | `help`, `?` | List commands |
 | `config`, `status` | Show active and pending settings, driver state, CAN IDs, supply voltage, commanded current |
-| `set side left\|right` | Choose the motor side (sets the CAN IDs) |
+| `set node 1-15` | Set the board's CAN node ID (sets its CAN IDs) |
+| `set side left\|right` | Shorthand for node 1 / node 2 |
 | `set invert on\|off` | Flip the sign of commanded current and reported velocity |
 | `cal store` | Keep this boot's FOC alignment (FOC must already be running) |
 | `cal clear` | Forget the stored alignment |
@@ -85,9 +86,9 @@ The console runs at 115200 baud. Lines end in LF or CR, and commands are case-in
 ## Runtime behaviour
 
 1. **Boot.** The firmware waits up to 2 s for a serial terminal, measures VIN, loads settings, starts CAN (if the board is configured) and configures the DRV8316. The motor is **not** energised yet.
-2. **Idle.** The board waits for `CMD_START_FOC` over CAN (or `start` on the console) and sends a status heartbeat every 100 ms.
+2. **Idle.** The board waits for `CMD_START_FOC` over CAN (or `start` on the console) and sends a status heartbeat every 100 ms, which includes the live supply voltage.
 3. **Start.** The board runs `motor.init()`, current-sense initialisation and `initFOC()`, which block for about 1–3 s. CAN frames received during the start are discarded. The result is reported as a `CMD_START_FOC` reply, and a `CMD_ERROR` frame is sent on failure. A failed start can be retried.
-4. **Running.** The board runs FOC current (torque) control. Target current comes from the broadcast frame and is clamped to ±`MOTOR_CURRENT_LIMIT`. Shaft velocity is sent every 10 ms.
+4. **Running.** The board runs FOC current (torque) control. Target current comes from the board's current frame and is clamped to ±`MOTOR_CURRENT_LIMIT`. Shaft velocity is sent every 10 ms.
 
 ### Safety features
 
@@ -97,13 +98,13 @@ The console runs at 115200 baud. Lines end in LF or CR, and commands are case-in
 | Watchdog | Independent watchdog (250 ms), started once FOC is running |
 | DRV8316 fault polling | Status is read every 500 ms. A new fault is printed, reported over CAN (`ERR_DRIVER_FAULT`) and cleared |
 | CAN bus-off recovery | The firmware detects bus-off and rejoins the bus automatically |
-| Input validation | NaN or Inf current commands are ignored, and short broadcast frames are rejected |
+| Input validation | NaN or Inf current commands are ignored (NaN = "no command for this node"), and short current frames are rejected |
 
 ### Status LED
 
 | Pattern | Meaning |
 |---|---|
-| Fast blink (5 Hz) | Unconfigured: set a side and save |
+| Fast blink (5 Hz) | Unconfigured: set a node ID and save |
 | Short blip every second | Idle, waiting for `CMD_START_FOC` |
 | Solid on | FOC running |
 | Double blink every second | FOC start failed (send `CMD_START_FOC` to retry) |
@@ -122,6 +123,7 @@ The console runs at 115200 baud. Lines end in LF or CR, and commands are case-in
 | `SHAFT_VELOCITY_TELEMETRY_INTERVAL_US` | 10 000 | Velocity telemetry period |
 | `COMMAND_TIMEOUT_MS` | 100 | Current command timeout |
 | `CAN_STATUS_INTERVAL_MS` | 100 | Heartbeat period |
+| `SUPPLY_SAMPLE_INTERVAL_MS` / `SUPPLY_FILTER_TAU_MS` | 10 / 200 | Live VIN sample period and filter time constant (reported in the heartbeat) |
 | `DRV_STATUS_POLL_INTERVAL_MS` | 500 | DRV8316 fault poll period |
 | `WATCHDOG_TIMEOUT_US` | 250 000 | Watchdog timeout |
 | `BOOT_SERIAL_WAIT_MS` | 2 000 | How long to wait for a serial terminal at boot |
@@ -137,7 +139,8 @@ The CAN IDs and bit rate are in [`Firmware/include/can_protocol.h`](../Firmware/
 | `src/can_bus.*` | FDCAN setup and filters, frame encoding and decoding, heartbeat, bus-off recovery |
 | `src/board_settings.*` | Per-board settings in flash (EEPROM emulation, CRC-32 and version checked) |
 | `src/serial_console.*` | Non-blocking USB serial command console |
-| `src/supply_voltage.*` | VIN measurement through the V_SENS divider |
+| `src/supply_voltage.*` | VIN measurement through the V_SENS divider (boot measurement, also used by `motor_test`) |
+| `src/supply_monitor.*` | Live, filtered VIN for the CAN heartbeat: `analogRead()` before the current sense starts, regular ADC1 conversions afterwards |
 | `src/dfu.*` | Reboot into the ROM DFU bootloader (also with the watchdog running), USER button |
 | `src/clock_config.cpp` | 160 MHz clock tree from the 16 MHz HSE |
 | `src/motor_test/` | Bench-test firmware (`motor_test` environment only) |

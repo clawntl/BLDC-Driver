@@ -4,7 +4,8 @@
 // Type `help` for the command list. Call pollSerialConsole() once per loop().
 //
 //   config                    show active (running) and pending settings + state
-//   set side left|right       choose which motor this board drives (CAN IDs)
+//   set node 1-15             this board's CAN node ID (sets its CAN IDs)
+//   set side left|right       shorthand for node 1 / 2
 //   set invert on|off         flip command/telemetry sign for this motor
 //   cal store                 keep this boot's FOC alignment (FOC must be running)
 //   cal clear                 forget the stored alignment

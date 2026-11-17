@@ -12,14 +12,11 @@
 // survive reflashing; a full-chip erase (STM32CubeProgrammer / ST-Link) wipes
 // them and the board comes back up unconfigured.
 
-enum class MotorSide : uint8_t {
-    Unset = 0,
-    Left  = 1,
-    Right = 2,
-};
-
 struct BoardSettings {
-    MotorSide side = MotorSide::Unset;
+    // CAN node ID, NODE_ID_MIN..NODE_ID_MAX; 0 = not set (CAN stays off).
+    // Stored in the byte that held left (1) / right (2) in firmware 1.0/1.1,
+    // so a board set to left comes up as node 1 and right as node 2.
+    uint8_t nodeId = 0;
 
     // Flip the sign of the commanded current and of the reported velocity, so
     // the host can use the same sign convention for both (mirrored) wheels.
@@ -58,17 +55,24 @@ bool saveBoardSettings();
 // image is over 126 KB. Checked at boot and before every save.
 bool firmwareOverlapsSettings();
 
-// True once a motor side has been saved; CAN is only started when true.
+// True once a node ID has been saved; CAN is only started when true.
 bool boardConfigured();
 
-// CAN identifiers derived from activeSettings().side. Only meaningful when
-// boardConfigured() is true.
-uint32_t thisMotorCanAddr();
-uint32_t telemetryCanAddr();
-// Byte offset of this motor's float in the 8-byte BOTH_MOTOR_CAN_ADDR frame.
-uint8_t  broadcastFloatOffset();
+// CAN identifiers derived from activeSettings().nodeId (see can_protocol.h).
+// Only meaningful when boardConfigured() is true.
+uint32_t commandCanId();
+uint32_t telemetryCanId();
+uint32_t currentFrameCanId();
+// Byte offset of this board's float in its current frame (0 or 4).
+uint8_t  currentFloatOffset();
 
-const char *sideName(MotorSide side);
+bool validNodeId(int id);
+
+// True if the pending settings differ from the active ones (unsaved changes).
+bool settingsUnsaved();
+
+// Size of the firmware image in flash, in bytes.
+uint32_t firmwareImageBytes();
 
 // Address of the flash page used for storage (for diagnostics).
 uint32_t settingsFlashAddress();

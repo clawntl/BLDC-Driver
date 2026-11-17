@@ -12,6 +12,7 @@
 #include "can_bus.h"
 #include "can_protocol.h"
 #include "motor_control.h"
+#include "supply_monitor.h"
 #include "serial_console.h"
 #include "dfu.h"
 
@@ -32,7 +33,7 @@ static void updateStatusLed() {
 
 static void printUnconfiguredHelp() {
     Serial.println("*** Board not configured: CAN is disabled. ***");
-    Serial.println("    Type `set side left` or `set side right`, then `save`. `help` lists all commands.");
+    Serial.println("    Type `set node 1-15` (or `set side left|right` for node 1/2), then `save`. `help` lists all commands.");
 }
 
 void setup() {
@@ -106,6 +107,8 @@ void loop() {
     pollSerialConsole();
 
     motorControlLoop();
+
+    updateSupplyMonitor();
 
     pollCAN();
 

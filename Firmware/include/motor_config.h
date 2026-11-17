@@ -33,13 +33,20 @@
 // How often the shaft velocity is broadcast over CAN, in microseconds.
 #define SHAFT_VELOCITY_TELEMETRY_INTERVAL_US 10'000
 
-// If no BOTH_MOTOR_CAN_ADDR current command arrives for this long while FOC
+// If no current command (in this node's current frame) arrives for this long while FOC
 // is running, the target current is forced to 0 A (motor freewheels) until
 // commands resume. Protects against a crashed host or unplugged CAN cable.
 #define COMMAND_TIMEOUT_MS 100
 
 // How often the CMD_DRIVER_STATUS heartbeat is sent over CAN, in milliseconds.
+// It also carries the live supply voltage (see supply_monitor.h).
 #define CAN_STATUS_INTERVAL_MS 100
+
+// Live supply voltage: sample interval and low-pass filter time constant, in
+// milliseconds. Each sample is one ADC conversion (~7 us), so this costs
+// nothing noticeable in the FOC loop.
+#define SUPPLY_SAMPLE_INTERVAL_MS 10
+#define SUPPLY_FILTER_TAU_MS      200
 
 // How often the DRV8316 fault status is polled over SPI while FOC runs.
 #define DRV_STATUS_POLL_INTERVAL_MS 500
