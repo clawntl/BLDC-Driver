@@ -79,6 +79,32 @@ bool readSupplyCurrent(float &amps) {
     return true;
 }
 
+static float liveVolts = 0;
+static uint32_t lastSampleMs = 0;
+static uint8_t failedReads = 0;
+
+void updateSupplyMonitor() {
+    if (!present) return;
+    const uint32_t now = millis();
+    if (lastSampleMs != 0 && now - lastSampleMs < SUPPLY_SAMPLE_INTERVAL_MS) return;
+    lastSampleMs = now ? now : 1;
+    float v;
+    if (readSupplyVoltage(v)) {
+        liveVolts = v;
+        failedReads = 0;
+    } else if (++failedReads >= 3) {
+        liveVolts = 0;  // stop reporting a stale value
+    }
+}
+
+float supplyVoltageNow() { return liveVolts; }
+
+uint16_t supplyMillivolts() {
+    const float mv = liveVolts * 1000.0f + 0.5f;
+    if (mv <= 0) return 0;
+    return mv >= 65535.0f ? 65535 : static_cast<uint16_t>(mv);
+}
+
 float measuredSupplyVoltageOrDefault() {
     float vin = 0;
     if (!readSupplyVoltage(vin)) {

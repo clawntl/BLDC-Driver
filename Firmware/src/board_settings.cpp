@@ -48,7 +48,7 @@ void readStored(StoredSettings &out) {
 }
 
 bool settingsAreSane(const BoardSettings &s) {
-    if (s.side != MotorSide::Unset && s.side != MotorSide::Left && s.side != MotorSide::Right) return false;
+    if (s.nodeId != 0 && !validNodeId(s.nodeId)) return false;
     if (s.calibrationValid) {
         if (s.sensorDirection != 1 && s.sensorDirection != -1) return false;
         if (!std::isfinite(s.zeroElectricAngle)) return false;
@@ -89,10 +89,22 @@ bool loadBoardSettings() {
 // End of the firmware image in flash (initialised data is stored after .text).
 extern "C" uint32_t _sidata, _sdata, _edata;
 
-bool firmwareOverlapsSettings() {
+uint32_t firmwareImageBytes() {
     const uint32_t imageEnd = reinterpret_cast<uint32_t>(&_sidata)
                             + (reinterpret_cast<uint32_t>(&_edata) - reinterpret_cast<uint32_t>(&_sdata));
-    return imageEnd > settingsFlashAddress();
+    return imageEnd - FLASH_BASE;
+}
+
+bool firmwareOverlapsSettings() {
+    return FLASH_BASE + firmwareImageBytes() > settingsFlashAddress();
+}
+
+bool settingsUnsaved() {
+    return active.nodeId != pending.nodeId
+        || active.invertDirection != pending.invertDirection
+        || active.calibrationValid != pending.calibrationValid
+        || active.sensorDirection != pending.sensorDirection
+        || active.zeroElectricAngle != pending.zeroElectricAngle;
 }
 
 bool saveBoardSettings() {
@@ -124,29 +136,17 @@ bool saveBoardSettings() {
 }
 
 bool boardConfigured() {
-    return active.side == MotorSide::Left || active.side == MotorSide::Right;
+    return validNodeId(active.nodeId);
 }
 
-uint32_t thisMotorCanAddr() {
-    return active.side == MotorSide::Left ? LEFT_MOTOR_CAN_ADDR : RIGHT_MOTOR_CAN_ADDR;
+bool validNodeId(int id) {
+    return id >= NODE_ID_MIN && id <= NODE_ID_MAX;
 }
 
-uint32_t telemetryCanAddr() {
-    return active.side == MotorSide::Left ? LEFT_MOTOR_SEND_TO : RIGHT_MOTOR_SEND_TO;
-}
-
-uint8_t broadcastFloatOffset() {
-    // Left motor reads the first 4 bytes, right motor the last 4.
-    return active.side == MotorSide::Left ? 0 : 4;
-}
-
-const char *sideName(MotorSide side) {
-    switch (side) {
-        case MotorSide::Left:  return "left";
-        case MotorSide::Right: return "right";
-        default:               return "unset";
-    }
-}
+uint32_t commandCanId()      { return COMMAND_ID_BASE + active.nodeId; }
+uint32_t telemetryCanId()    { return TELEMETRY_ID_BASE + active.nodeId; }
+uint32_t currentFrameCanId() { return CURRENT_FRAME_BASE + (active.nodeId - 1) / 2; }
+uint8_t  currentFloatOffset() { return (active.nodeId % 2) ? 0 : 4; } // odd: bytes 0-3, even: 4-7
 
 uint32_t settingsFlashAddress() {
     // Same calculation as stm32_eeprom.c's default FLASH_BASE_ADDRESS (last page).

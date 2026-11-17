@@ -13,7 +13,7 @@
 #include "power_monitor.h"
 
 static bool settingsEqual(const BoardSettings &a, const BoardSettings &b) {
-    return a.side == b.side
+    return a.nodeId == b.nodeId
         && a.invertDirection == b.invertDirection
         && a.calibrationValid == b.calibrationValid
         && (!a.calibrationValid
@@ -22,8 +22,8 @@ static bool settingsEqual(const BoardSettings &a, const BoardSettings &b) {
 
 static void printSettings(const char *label, const BoardSettings &s) {
     Serial.print(label);
-    Serial.print("side=");
-    Serial.print(sideName(s.side));
+    Serial.print("node=");
+    if (s.nodeId) Serial.print(s.nodeId); else Serial.print("not set");
     Serial.print(" invert=");
     Serial.print(s.invertDirection ? "on" : "off");
     Serial.print(" calibration=");
@@ -47,6 +47,15 @@ static const char *stateName(uint8_t state) {
 }
 
 void printConfig() {
+    Serial.print("Firmware: ");
+    Serial.print(FIRMWARE_VERSION_MAJOR); Serial.print('.');
+    Serial.print(FIRMWARE_VERSION_MINOR); Serial.print('.');
+    Serial.print(FIRMWARE_VERSION_PATCH);
+    Serial.print(" (CAN protocol ");
+    Serial.print(CAN_PROTOCOL_VERSION);
+    Serial.print("), image ");
+    Serial.print(firmwareImageBytes());
+    Serial.println(" bytes");
     const BoardSettings &active  = activeSettings();
     const BoardSettings &pending = pendingSettings();
 
@@ -60,19 +69,21 @@ void printConfig() {
     Serial.println(stateName(driverState()));
 
     if (boardConfigured()) {
-        Serial.print("CAN:     commands 0x");
-        Serial.print(thisMotorCanAddr(), HEX);
-        Serial.print(", telemetry 0x");
-        Serial.print(telemetryCanAddr(), HEX);
-        Serial.print(", broadcast bytes ");
-        Serial.print(broadcastFloatOffset());
+        Serial.print("CAN:     current frame 0x");
+        Serial.print(currentFrameCanId(), HEX);
+        Serial.print(" bytes ");
+        Serial.print(currentFloatOffset());
         Serial.print("-");
-        Serial.print(broadcastFloatOffset() + 3);
+        Serial.print(currentFloatOffset() + 3);
+        Serial.print(", commands 0x");
+        Serial.print(commandCanId(), HEX);
+        Serial.print(", telemetry 0x");
+        Serial.print(telemetryCanId(), HEX);
         if (!canStarted())    Serial.print("  [NOT STARTED]");
         else if (canBusOff()) Serial.print("  [BUS-OFF]");
         Serial.println();
     } else {
-        Serial.println("CAN:     off (board not configured - `set side left|right`, then `save`)");
+        Serial.println("CAN:     off (board not configured - `set node 1-15`, then `save`)");
     }
 
     const uint8_t flags = statusFlags();
@@ -105,7 +116,8 @@ void printConfig() {
 static void printHelp() {
     Serial.println("Commands:");
     Serial.println("  config                  show settings and state");
-    Serial.println("  set side left|right     which motor this board drives (sets CAN IDs)");
+    Serial.println("  set node 1-15           this board's CAN node ID (sets its CAN IDs)");
+    Serial.println("  set side left|right     shorthand for node 1 / node 2 (a robot's wheels)");
     Serial.println("  set invert on|off       flip command/telemetry sign");
     Serial.println("  cal store               keep this boot's FOC alignment (FOC must be running)");
     Serial.println("  cal clear               forget the stored alignment");
@@ -127,13 +139,17 @@ static void cmdSet(char *args) {
     char *key = strtok(args, " ");
     char *val = strtok(nullptr, " ");
     if (!key || !val) {
-        Serial.println("usage: set side left|right  |  set invert on|off");
+        Serial.println("usage: set node 1-15  |  set side left|right  |  set invert on|off");
         return;
     }
     BoardSettings &p = pendingSettings();
-    if (!strcasecmp(key, "side")) {
-        if (!strcasecmp(val, "left"))       p.side = MotorSide::Left;
-        else if (!strcasecmp(val, "right")) p.side = MotorSide::Right;
+    if (!strcasecmp(key, "node")) {
+        const int id = atoi(val);
+        if (!validNodeId(id)) { Serial.println("node must be 1-15"); return; }
+        p.nodeId = (uint8_t)id;
+    } else if (!strcasecmp(key, "side")) {
+        if (!strcasecmp(val, "left"))       p.nodeId = 1;
+        else if (!strcasecmp(val, "right")) p.nodeId = 2;
         else { Serial.println("side must be left or right"); return; }
     } else if (!strcasecmp(key, "invert")) {
         if (!parseOnOff(val, p.invertDirection)) { Serial.println("invert must be on or off"); return; }

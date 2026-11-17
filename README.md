@@ -36,12 +36,18 @@ It's the successor to [BLDC-Driver](https://github.com/clawntl/BLDC-Driver). The
 
 ## Firmware
 
-The firmware is ported from [BLDC-Driver](https://github.com/clawntl/BLDC-Driver/tree/main/Firmware) and uses the same CAN protocol, serial console and board settings, so the docs there ([firmware guide](https://github.com/clawntl/BLDC-Driver/blob/main/docs/firmware.md), [CAN protocol](https://github.com/clawntl/BLDC-Driver/blob/main/docs/can-protocol.md), [test routines](https://github.com/clawntl/BLDC-Driver/blob/main/docs/test-routines.md)) still apply. The differences on Mk2 are:
+The firmware is ported from [BLDC-Driver](https://github.com/engbuildspace/BLDC-Driver/tree/main/Firmware) firmware **1.2.0** (CAN protocol 3) and uses the same CAN protocol, serial console and board settings, so the docs there ([firmware guide](https://github.com/engbuildspace/BLDC-Driver/blob/main/docs/firmware.md), [CAN protocol](https://github.com/engbuildspace/BLDC-Driver/blob/main/docs/can-protocol.md), [test routines](https://github.com/engbuildspace/BLDC-Driver/blob/main/docs/test-routines.md)) still apply. A MiniFOC and a BLDC-Driver can share a bus and run with the same controller firmware. That covers:
+
+- **Node IDs 1-15:** currents in frame `0x010 + (n-1)/2` (NaN = no command for that node), commands on `0x020 + n`, telemetry on `0x100 + n`.
+- **Configuration over CAN:** firmware info, settings, node ID, invert, alignment store/clear, save, revert and reboot.
+- **Supply voltage** in the status heartbeat (mV).
+
+The differences on Mk2 are:
 
 - **Pins:** new mapping in [`Firmware/include/pins.h`](Firmware/include/pins.h). The user LED is on PB2.
 - **Encoder:** AS5047P instead of AS5048A.
 - **Current sense:** SimpleFOC `InlineCurrentSense` (3 mΩ shunts, INA241A3 at 50 V/V) instead of the DRV8316's low-side amplifiers.
-- **Supply voltage:** read from the INA226 over I²C instead of an ADC divider. The `config` console command also shows the live supply voltage and current.
+- **Supply voltage:** read from the INA226 over I²C instead of the V_SENS ADC divider, both at boot (PWM scaling) and every 100 ms for the CAN heartbeat. The INA226 does its own averaging, so there is no extra filter. The `config` console command also shows the live supply voltage and current.
 - **DRV8316 buck:** switched off, because 5 V comes from the AP63205.
 - **CAN transceiver:** its VIO pin is powered from PC13, so the firmware turns it on at boot.
 - **No DFU button GPIO:** BOOT is wired straight to BOOT0/CAN_RX. To enter DFU, hold BOOT and press RST, or type `dfu` in the serial console.
@@ -52,7 +58,9 @@ Build and flash from `Firmware/`:
 pio run -e driver -t upload
 ```
 
-Then configure the board over USB serial (`set side left|right`, `save`), the same as on BLDC-Driver.
+Then configure the board over USB serial (`set node 1-15`, or `set side left|right` for node 1/2, then `save`), the same as on BLDC-Driver. A board saved as left/right by older firmware comes up as node 1/2.
+
+The CAN bench test tools are in [`Firmware/tools/can_test`](Firmware/tools/can_test) (`minifoc_cantest.py`, and a GUI that drives two nodes at once or monitors a bus with the robot's controller on it).
 
 ## Known issues
 

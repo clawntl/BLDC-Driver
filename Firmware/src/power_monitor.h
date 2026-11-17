@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // Supply monitoring with the on-board INA226 (U13) on I2C1:
 //   V_IN -> R1 3 mOhm shunt -> V_M (DRV8316 + 5 V buck)
 // Bus voltage is measured on the V_IN side. Current is positive when the
@@ -23,3 +25,13 @@ bool readSupplyCurrent(float &amps);
 // SUPPLY_VOLTAGE_MAX]; otherwise prints a warning and returns the fallback
 // MOTOR_VOLTAGE_POWER_SUPPLY from motor_config.h.
 float measuredSupplyVoltageOrDefault();
+
+// Live supply voltage for the CAN status heartbeat (BLDC-Driver's
+// supply_monitor.h API, implemented with the INA226 instead of the V_SENS ADC).
+// Call updateSupplyMonitor() from loop(): it reads the INA226 every
+// SUPPLY_SAMPLE_INTERVAL_MS.
+void updateSupplyMonitor();
+// Last reading in volts, 0 if there is none (INA226 missing or not answering).
+float supplyVoltageNow();
+// The same in millivolts for the heartbeat (0 = no reading).
+uint16_t supplyMillivolts();
