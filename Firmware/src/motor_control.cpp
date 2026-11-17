@@ -173,6 +173,11 @@ static bool startFOC() {
     // Not running yet: make sure nothing stale gets applied on the first move().
     target_current = 0;
 
+    // Write the DRV8316 registers again. If the board booted on USB power
+    // alone, the DRV8316 had no supply when setupFOC() configured it, so it
+    // would otherwise run with its defaults (buck, over-current, slew).
+    configureDRV8316(driver);
+
     if (!motor.init()) {
         Serial.println("Motor init failed!");
         sendError(ERR_MOTOR_INIT);
