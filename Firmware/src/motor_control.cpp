@@ -51,6 +51,7 @@ static bool drv_fault = false;
 static float supply_voltage = 0;
 
 static uint32_t lastVelocitySendTime = 0;
+static uint32_t velocity_interval_us = SHAFT_VELOCITY_TELEMETRY_INTERVAL_US;
 static uint32_t lastCommandMs = 0;
 static uint32_t lastDrvPollMs = 0;
 
@@ -305,7 +306,7 @@ void motorControlLoop() {
     // motor.shaftVelocity() again would feed the velocity low-pass filter a
     // second sample per loop and distort it.
     const uint32_t currentTime = _micros();
-    if (currentTime - lastVelocitySendTime > SHAFT_VELOCITY_TELEMETRY_INTERVAL_US) {
+    if (currentTime - lastVelocitySendTime >= velocity_interval_us) {
         sendFloat(CMD_SHAFT_VELOCITY, direction_sign * motor.shaft_velocity, telemetryCanAddr());
         lastVelocitySendTime = currentTime;
     }
@@ -320,6 +321,9 @@ void stopMotor() {
 }
 
 bool focRunning() { return foc_running; }
+
+void setVelocityTelemetryIntervalMs(uint8_t ms) { velocity_interval_us = (uint32_t)ms * 1000u; }
+uint8_t velocityTelemetryIntervalMs() { return (uint8_t)(velocity_interval_us / 1000u); }
 
 uint8_t driverState() {
     if (!boardConfigured()) return DRIVER_STATE_UNCONFIGURED;

@@ -47,6 +47,15 @@ static const char *stateName(uint8_t state) {
 }
 
 void printConfig() {
+    Serial.print("Firmware: ");
+    Serial.print(FIRMWARE_VERSION_MAJOR); Serial.print('.');
+    Serial.print(FIRMWARE_VERSION_MINOR); Serial.print('.');
+    Serial.print(FIRMWARE_VERSION_PATCH);
+    Serial.print(" (CAN protocol ");
+    Serial.print(CAN_PROTOCOL_VERSION);
+    Serial.print("), image ");
+    Serial.print(firmwareImageBytes());
+    Serial.println(" bytes");
     const BoardSettings &active  = activeSettings();
     const BoardSettings &pending = pendingSettings();
 

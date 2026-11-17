@@ -70,5 +70,11 @@ uint8_t  broadcastFloatOffset();
 
 const char *sideName(MotorSide side);
 
+// True if the pending settings differ from the active ones (unsaved changes).
+bool settingsUnsaved();
+
+// Size of the firmware image in flash, in bytes.
+uint32_t firmwareImageBytes();
+
 // Address of the flash page used for storage (for diagnostics).
 uint32_t settingsFlashAddress();

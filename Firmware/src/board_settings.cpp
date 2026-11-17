@@ -89,10 +89,22 @@ bool loadBoardSettings() {
 // End of the firmware image in flash (initialised data is stored after .text).
 extern "C" uint32_t _sidata, _sdata, _edata;
 
-bool firmwareOverlapsSettings() {
+uint32_t firmwareImageBytes() {
     const uint32_t imageEnd = reinterpret_cast<uint32_t>(&_sidata)
                             + (reinterpret_cast<uint32_t>(&_edata) - reinterpret_cast<uint32_t>(&_sdata));
-    return imageEnd > settingsFlashAddress();
+    return imageEnd - FLASH_BASE;
+}
+
+bool firmwareOverlapsSettings() {
+    return FLASH_BASE + firmwareImageBytes() > settingsFlashAddress();
+}
+
+bool settingsUnsaved() {
+    return active.side != pending.side
+        || active.invertDirection != pending.invertDirection
+        || active.calibrationValid != pending.calibrationValid
+        || active.sensorDirection != pending.sensorDirection
+        || active.zeroElectricAngle != pending.zeroElectricAngle;
 }
 
 bool saveBoardSettings() {

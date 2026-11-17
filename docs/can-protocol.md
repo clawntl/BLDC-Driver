@@ -33,6 +33,43 @@ The hardware filters on each driver accept only `0x020` and its own command ID.
 - If the board's `invert` setting is on, the sign is flipped on the driver.
 - Send this frame **at least every 100 ms** while running. Otherwise the command timeout applies 0 A until frames resume.
 
+### Configuration commands (protocol version 2)
+
+These are sent on the board's command ID (`0x021` or `0x022`). The reply comes back on its telemetry ID with the same command byte. Firmware 1.0 (protocol 1) ignores them and doesn't reply, so a host can use `CMD_GET_INFO` to find out which it's talking to.
+
+| CMD | Name | Request | Reply |
+|---|---|---|---|
+| `0x20` | `CMD_GET_INFO` | `[0x20]` | `[0x20][protocol][fw major][fw minor][fw patch][image KB][0][0]` |
+| `0x21` | `CMD_GET_CONFIG` | `[0x21][0 = active, 1 = pending]` | `[0x21][which][side][config flags][zero electric angle, float]` |
+| `0x22` | `CMD_SET_PARAM` | `[0x22][param][float value]` | `[0x22][param][status][float value now]` |
+| `0x23` | `CMD_CALIBRATION` | `[0x23][1 = store, 2 = clear]` | `[0x23][op][status]` |
+| `0x24` | `CMD_SAVE` | `[0x24]` | `[0x24][status]`, then (if OK) the board stops the motor, writes flash and reboots |
+| `0x25` | `CMD_REVERT` | `[0x25]` | `[0x25][status]`: unsaved changes discarded |
+| `0x26` | `CMD_REBOOT` | `[0x26]` | `[0x26][status]`, then the board resets (the motor stops) |
+| | any other | | `[0xFE][command][1]` (`CMD_NACK`: not understood) |
+
+**Parameters (`CMD_SET_PARAM`):**
+
+| ID | Name | Values | Kind |
+|---|---|---|---|
+| 1 | `PARAM_SIDE` | 1 = left, 2 = right | Saved. **The board's CAN IDs change after the reboot** |
+| 2 | `PARAM_INVERT` | 0 / 1 | Saved |
+| `0x10` | `PARAM_VELOCITY_INTERVAL_MS` | 1–100 (default 10) | Runtime: applies at once and goes back to the default after a reset |
+
+Saved parameters and `CMD_CALIBRATION` change the **pending** settings, exactly like the serial console's `set` and `cal`. They take effect after `CMD_SAVE`. `CMD_CALIBRATION` store needs FOC to be running (it keeps this boot's alignment); clear makes the next start run the sensor alignment.
+
+**Status byte:** 0 = OK, 1 = unknown command, parameter or operation, 2 = value out of range, 3 = no alignment to store (FOC not running), 4 = flash: the firmware image overlaps the settings page.
+
+**Config flags (`CMD_GET_CONFIG`):** bit 0 = invert, bit 1 = an alignment is stored, bit 2 = stored sensor direction is CCW, bit 3 = unsaved changes (pending differs from active).
+
+`CMD_SAVE` and `CMD_REBOOT` stop the motor. A host must not send them while the robot is balancing.
+
+#### Re-running the sensor alignment
+
+1. Send `CMD_CALIBRATION` clear, then `CMD_SAVE`. The board reboots.
+2. Start FOC as normal. With no stored alignment it runs the sensor alignment, so the wheel moves a little.
+3. Send `CMD_CALIBRATION` store, then `CMD_SAVE`. The board reboots and from then on uses the new alignment.
+
 ### `CMD_START_FOC`, `0x10`, on the board's command ID
 
 Payload: `[0x10]` (any extra bytes are ignored).
@@ -45,12 +82,12 @@ All frames are sent on the board's telemetry ID.
 
 | CMD | Name | Payload | When |
 |---|---|---|---|
-| `0x02` | `CMD_SHAFT_VELOCITY` | float rad/s (sign follows the invert setting) | Every 10 ms while FOC runs |
+| `0x02` | `CMD_SHAFT_VELOCITY` | float rad/s (sign follows the invert setting) | Every 10 ms while FOC runs (`PARAM_VELOCITY_INTERVAL_MS` changes this) |
 | `0x03` | `CMD_DRIVER_STATUS` | `[state][flags][supply mV, 2 bytes]` | Every 100 ms, in every state |
 | `0x10` | `CMD_START_FOC` | float `1.0` = started, `0.0` = failed | After each start request |
 | `0xFF` | `CMD_ERROR` | float error code | On an error |
 
-All frames are 5 bytes long: one command byte plus four payload bytes.
+These frames are 5 bytes long: one command byte plus four payload bytes. Configuration replies (see above) are also sent on the telemetry ID.
 
 ### Driver state (status byte 1)
 
