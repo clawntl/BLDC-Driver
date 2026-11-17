@@ -8,13 +8,27 @@ test sequence or lets you poke the driver by hand.
 
 Commands
   auto     Run the test sequence, print PASS / FAIL, exit code 0 if all pass.
-  monitor  Print every MiniFOC frame on the bus, decoded. Sends nothing.
+  monitor  Print every MiniFOC frame on the bus, decoded. Sends nothing
+           (add --listen-only to keep the adapter fully silent, e.g. with the
+           robot's controller on the bus: it then doesn't even ACK frames).
   run      Start FOC if needed, then hold --current until Ctrl+C. Prints the
            mean velocity, state and flags once a second.
   busoff   Bus-off recovery test: spins the motor, asks you to unplug the
            CAN cable for a couple of seconds, and checks that the driver
            drops the current, keeps running and comes back on the bus.
+  info     Read the firmware version and settings (CAN protocol 2+).
+  config   Change the board's settings over CAN (protocol 2+), e.g.
+             config --set-node 3 --save      give node 1 the node ID 3
+             config --set-invert on --save
+             config --cal clear --save       next Start FOC re-aligns
+             config --cal store --save       keep this boot's alignment
+             config --revert / --reboot
+           Saved settings are PENDING until --save, which stops the motor,
+           writes flash and reboots the board.
   list     List the connected adapters (elmue) or channels (python-can).
+
+Boards are addressed by CAN node ID 1-15 (firmware 1.2+, `set node N` on the
+serial console); --side left/right is shorthand for node 1/2.
 
 Bit timing defaults to what the driver uses (1 Mbit/s, 87.5 %, classic CAN);
 --bitrate, --sample-point, --fd, --data-bitrate, --data-sample-point change it.
@@ -33,13 +47,15 @@ Adapters (--backend)
              (for socketcan, set the bitrate with `ip link` beforehand).
 
 Examples
-  python minifoc_cantest.py --side right auto
+  python minifoc_cantest.py --node 2 auto
   python minifoc_cantest.py --side left run --current 0.5
+  python minifoc_cantest.py --node 3 info
   python minifoc_cantest.py monitor
+  python minifoc_cantest.py monitor --listen-only
 
-SAFETY: the motor WILL spin. Clamp it or lift the wheel. `auto` must have
-only ONE MiniFOC on the bus (it sends current to the other side's half of
-0x020 to check that it is ignored).
+SAFETY: the motor WILL spin. Clamp it or lift the wheel. `auto` sends
+current to the other half of the node's current frame (its partner node: 1/2,
+3/4, ...) to check that it is ignored, so that partner must not be on the bus.
 """
 
 import argparse
@@ -55,17 +71,88 @@ sys.dont_write_bytecode = True
 # Protocol (Firmware/include/can_protocol.h)
 # ----------------------------------------------------------------------------
 
-BOTH_MOTOR_ID = 0x020
-SIDES = {
-    #        command ID, telemetry ID, byte offset in 0x020
-    "left":  (0x021, 0x101, 0),
-    "right": (0x022, 0x100, 4),
-}
+# CAN protocol 3 (firmware 1.2): node IDs 1-15. For node n:
+#   current frame  0x010 + (n-1)/2, odd n bytes 0-3, even n bytes 4-7 (NaN = no command)
+#   commands       0x020 + n
+#   telemetry      0x100 + n
+CURRENT_FRAME_BASE = 0x010
+COMMAND_ID_BASE    = 0x020
+TELEMETRY_ID_BASE  = 0x100
+NODE_MIN, NODE_MAX = 1, 15
+SIDE_NODES = {"left": 1, "right": 2}   # a robot's wheels
+NAN = math.nan
+
+
+def node_ids(node):
+    """(current frame ID, byte offset in it, command ID, telemetry ID)."""
+    return CURRENT_FRAME_BASE + (node - 1) // 2, 0 if node % 2 else 4, COMMAND_ID_BASE + node, TELEMETRY_ID_BASE + node
+
+
+def partner_node(node):
+    """The node that shares this node's current frame."""
+    return node + 1 if node % 2 else node - 1
+
+
+def is_current_frame(can_id):
+    return CURRENT_FRAME_BASE <= can_id <= CURRENT_FRAME_BASE + (NODE_MAX - 1) // 2
+
+
+def current_frame_nodes(can_id):
+    """(node in bytes 0-3, node in bytes 4-7) of a current frame."""
+    k = can_id - CURRENT_FRAME_BASE
+    return 2 * k + 1, 2 * k + 2
+
 
 CMD_SHAFT_VELOCITY = 0x02
 CMD_DRIVER_STATUS  = 0x03
 CMD_START_FOC      = 0x10
+CMD_GET_INFO       = 0x20
+CMD_GET_CONFIG     = 0x21
+CMD_SET_PARAM      = 0x22
+CMD_CALIBRATION    = 0x23
+CMD_SAVE           = 0x24
+CMD_REVERT         = 0x25
+CMD_REBOOT         = 0x26
+CMD_NACK           = 0xFE
 CMD_ERROR          = 0xFF
+
+CMD_NAMES = {CMD_START_FOC: "START_FOC", CMD_GET_INFO: "GET_INFO", CMD_GET_CONFIG: "GET_CONFIG",
+             CMD_SET_PARAM: "SET_PARAM", CMD_CALIBRATION: "CALIBRATION", CMD_SAVE: "SAVE",
+             CMD_REVERT: "REVERT", CMD_REBOOT: "REBOOT"}
+PARAM_NODE_ID, PARAM_INVERT, PARAM_VELOCITY_INTERVAL_MS = 1, 2, 0x10
+PARAM_NAMES = {PARAM_NODE_ID: "node ID", PARAM_INVERT: "invert", PARAM_VELOCITY_INTERVAL_MS: "velocity interval ms"}
+CAL_STORE, CAL_CLEAR = 1, 2
+
+
+def set_param_payload(param, value):
+    return bytes([CMD_SET_PARAM, param]) + struct.pack(">f", float(value))
+
+
+def parse_config(data):
+    """CMD_GET_CONFIG reply -> dict, or None."""
+    if len(data) < 8 or data[0] != CMD_GET_CONFIG:
+        return None
+    f = data[3]
+    return {"pending": bool(data[1]), "node": data[2], "invert": bool(f & CONFIG_FLAG_INVERT),
+            "aligned": bool(f & CONFIG_FLAG_CALIBRATION), "sensor_ccw": bool(f & CONFIG_FLAG_SENSOR_CCW),
+            "unsaved": bool(f & CONFIG_FLAG_UNSAVED), "zero_angle": be_float(data, 4)}
+
+
+def reply_status(data):
+    """Status byte of a configuration reply (0 = OK), or None for a NACK/unknown."""
+    if not data or data[0] == CMD_NACK:
+        return None
+    c = data[0]
+    if c == CMD_SET_PARAM and len(data) >= 3:
+        return data[2]
+    if c == CMD_CALIBRATION and len(data) >= 3:
+        return data[2]
+    if c in (CMD_SAVE, CMD_REVERT, CMD_REBOOT) and len(data) >= 2:
+        return data[1]
+    return 0
+CONFIG_STATUS = {0: "OK", 1: "unknown command/parameter", 2: "bad value", 3: "no alignment to store",
+                 4: "flash overlaps settings"}
+CONFIG_FLAG_INVERT, CONFIG_FLAG_CALIBRATION, CONFIG_FLAG_SENSOR_CCW, CONFIG_FLAG_UNSAVED = 1, 2, 4, 8
 
 STATE_NAMES = {0: "unconfigured", 1: "idle", 2: "running", 3: "fault (FOC start failed)"}
 STATE_IDLE, STATE_RUNNING, STATE_FAULT = 1, 2, 3
@@ -101,28 +188,68 @@ def state_name(state):
     return STATE_NAMES.get(state, "invalid (%d)" % state)
 
 
+def status_millivolts(data):
+    """Supply mV from a CMD_DRIVER_STATUS frame (0 = no reading / old firmware)."""
+    return (data[3] << 8) | data[4] if len(data) >= 5 else 0
+
+
+def fmt_amps(v):
+    return "-" if v != v else "%.3f A" % v   # NaN = no command
+
+
+def decode_reply(data):
+    """Configuration replies (protocol 2+), or None."""
+    c = data[0]
+    if c == CMD_GET_INFO and len(data) >= 6:
+        return "info: protocol %d, firmware %d.%d.%d, image %d KB" % tuple(data[1:6])
+    if c == CMD_GET_CONFIG and len(data) >= 8:
+        f = data[3]
+        names = [n for bit, n in ((CONFIG_FLAG_INVERT, "invert"), (CONFIG_FLAG_CALIBRATION, "aligned"),
+                                  (CONFIG_FLAG_SENSOR_CCW, "sensor-CCW"), (CONFIG_FLAG_UNSAVED, "UNSAVED")) if f & bit]
+        return "config (%s): node %s, %s, zero angle %.4f" % (
+            "pending" if data[1] else "active", data[2] or "not set", " ".join(names) or "no flags", be_float(data, 4))
+    if c == CMD_SET_PARAM and len(data) >= 7:
+        return "SET_PARAM %s: %s, now %g" % (PARAM_NAMES.get(data[1], "0x%02X" % data[1]),
+                                             CONFIG_STATUS.get(data[2], data[2]), be_float(data, 3))
+    if c == CMD_CALIBRATION and len(data) >= 3:
+        return "CALIBRATION %s: %s" % ({1: "store", 2: "clear"}.get(data[1], data[1]),
+                                       CONFIG_STATUS.get(data[2], data[2]))
+    if c in (CMD_SAVE, CMD_REVERT, CMD_REBOOT) and len(data) >= 2:
+        return "%s: %s" % (CMD_NAMES[c], CONFIG_STATUS.get(data[1], data[1]))
+    if c == CMD_NACK and len(data) >= 2:
+        return "NACK: command 0x%02X not understood" % data[1]
+    return None
+
+
 def decode(can_id, data):
     """Human-readable decoding of a MiniFOC frame, or None if not one."""
     d = bytes(data)
-    if can_id == BOTH_MOTOR_ID:
+    if is_current_frame(can_id):
+        a, b = current_frame_nodes(can_id)
         if len(d) != 8:
-            return "current command, INVALID length %d" % len(d)
-        return "current command  left %.3f A, right %.3f A" % (be_float(d, 0), be_float(d, 4))
-    for side, (cmd_id, tele_id, _) in SIDES.items():
-        if can_id == cmd_id and d:
-            return "%s command 0x%02X%s" % (side, d[0], " (START_FOC)" if d[0] == CMD_START_FOC else "")
-        if can_id == tele_id and d:
-            c = d[0]
-            if c == CMD_DRIVER_STATUS and len(d) >= 3:
-                return "%s status   %s, flags %s" % (side, state_name(d[1]), flag_names(d[2]))
-            if c == CMD_SHAFT_VELOCITY and len(d) >= 5:
-                return "%s velocity %.2f rad/s" % (side, be_float(d, 1))
-            if c == CMD_START_FOC and len(d) >= 5:
-                return "%s START_FOC reply %s" % (side, "OK" if be_float(d, 1) == 1.0 else "FAILED")
-            if c == CMD_ERROR and len(d) >= 5:
-                code = int(be_float(d, 1))
-                return "%s ERROR %d (%s)" % (side, code, ERROR_NAMES.get(code, "unknown"))
-            return "%s telemetry, unknown command 0x%02X" % (side, c)
+            return "currents node %d/%d, INVALID length %d" % (a, b, len(d))
+        return "currents  node %d: %s, node %d: %s" % (a, fmt_amps(be_float(d, 0)), b, fmt_amps(be_float(d, 4)))
+    if COMMAND_ID_BASE + NODE_MIN <= can_id <= COMMAND_ID_BASE + NODE_MAX and d:
+        n = can_id - COMMAND_ID_BASE
+        return "node %d command 0x%02X (%s)" % (n, d[0], CMD_NAMES.get(d[0], "?"))
+    if TELEMETRY_ID_BASE + NODE_MIN <= can_id <= TELEMETRY_ID_BASE + NODE_MAX and d:
+        n = can_id - TELEMETRY_ID_BASE
+        c = d[0]
+        if c == CMD_DRIVER_STATUS and len(d) >= 3:
+            mv = status_millivolts(d)
+            return "node %d status   %s, flags %s, supply %s" % (n, state_name(d[1]), flag_names(d[2]),
+                                                               "%.2f V" % (mv / 1000) if mv else "-")
+        if c == CMD_SHAFT_VELOCITY and len(d) >= 5:
+            return "node %d velocity %.2f rad/s" % (n, be_float(d, 1))
+        if c == CMD_START_FOC and len(d) >= 5:
+            return "node %d START_FOC reply %s" % (n, "OK" if be_float(d, 1) == 1.0 else "FAILED")
+        if c == CMD_ERROR and len(d) >= 5:
+            code = int(be_float(d, 1))
+            return "node %d ERROR %d (%s)" % (n, code, ERROR_NAMES.get(code, "unknown"))
+        r = decode_reply(d)
+        if r:
+            return "node %d %s" % (n, r)
+        return "node %d telemetry, unknown command 0x%02X" % (n, c)
     return None
 
 
@@ -346,7 +473,7 @@ def list_pycan_channels(interface):
 class ElmueBus:
     """Candlelight adapter with ElmuSoft CANable 2.5 firmware, via ElmuSoft's Python classes."""
 
-    def __init__(self, device_index=0, settings=None):
+    def __init__(self, device_index=0, settings=None, listen_only=False):
         settings = settings or CanSettings()
         cl = _load_elmue()
         self.cl = cl
@@ -388,7 +515,13 @@ class ElmueBus:
             t = self.candle.SetBitrate(True, *data[:3])
             info("  %s  (BRP %d, Seg1 %d, Seg2 %d)" % ((t,) + tuple(data[:3])))
             self.timing_text += "; " + t
-        self.candle.Start(cl.eDeviceFlags.GS_DevFlagNone)  # normal mode: ACKs frames, auto-retransmit
+        if listen_only:
+            # Silent: no ACKs, no error frames, can't send. The other nodes on
+            # the bus (drivers + controller) must ACK each other.
+            self.candle.Start(cl.eDeviceFlags.GS_DevFlagListenOnly)
+            self.timing_text += " (listen-only)"
+        else:
+            self.candle.Start(cl.eDeviceFlags.GS_DevFlagNone)  # normal mode: ACKs frames, auto-retransmit
         self.adapter_errors = 0
         self._last_err_print = 0.0
 
@@ -458,7 +591,7 @@ class ElmueBus:
 class PyCanBus:
     """Any python-can interface (slcan COM port, socketcan, gs_usb, pcan, ...)."""
 
-    def __init__(self, interface, channel, settings=None):
+    def __init__(self, interface, channel, settings=None, listen_only=False):
         settings = settings or CanSettings()
         try:
             import can
@@ -472,6 +605,8 @@ class PyCanBus:
             if interface != "socketcan":
                 kwargs["data_bitrate"] = settings.data_bitrate
         warn("  python-can: sample point is not set by this tool (the interface's default is used).")
+        if listen_only:
+            warn("  python-can: listen-only is not set by this tool; nothing is sent, but the adapter still ACKs.")
         self.bus = can.Bus(**kwargs)
         self.can = can
         self.timing_text = settings.describe()
@@ -507,9 +642,11 @@ class Aborted(Exception):
 
 
 class Driver:
-    def __init__(self, bus, side, interval_ms, verbose):
+    def __init__(self, bus, node, interval_ms, verbose):
         self.bus = bus
-        self.cmd_id, self.tele_id, self.offset = SIDES[side]
+        self.node = node
+        self.cur_id, self.offset, self.cmd_id, self.tele_id = node_ids(node)
+        self.config = {}             # 0 = active, 1 = pending: parse_config() of the last GET_CONFIG replies
         self.interval = interval_ms / 1000.0
         self.verbose = verbose
 
@@ -517,12 +654,18 @@ class Driver:
         self.last_flags = 0
         self.last_vel = 0.0
         self.last_status_time = None
+        self.last_mv = 0             # supply mV from the heartbeat (0 = no reading)
+        self.replies = {}            # last configuration reply per command byte
+        self.info = None             # (protocol, major, minor, patch, image KB) from CMD_GET_INFO
         self.start_reply = None
         self.errors = []
         self.drv_fault_seen = False
         self.tx_failures = 0
         self._last_tx_fail_print = 0.0
         self.should_abort = None  # optional callable; run() raises Aborted when it returns True
+        # Callables (can_id, data) that also get every received frame, e.g. the
+        # other side's Driver on the same bus, or a CommandWatch.
+        self.observers = []
         self.reset_window()
 
     # --- tracking ---
@@ -546,6 +689,7 @@ class Driver:
         cmd = data[0]
         if cmd == CMD_DRIVER_STATUS and len(data) >= 3:
             self.last_state, self.last_flags = data[1], data[2]
+            self.last_mv = status_millivolts(data)
             self.flags_seen |= data[2]
             self.status_count += 1
             self.last_status_time = time.monotonic()
@@ -560,7 +704,16 @@ class Driver:
         elif cmd == CMD_ERROR and len(data) >= 5:
             code = int(be_float(data, 1))
             self.errors.append(code)
-            error("  driver reported error %d (%s)" % (code, ERROR_NAMES.get(code, "unknown")))
+            error("  node %d reported error %d (%s)" % (self.node, code, ERROR_NAMES.get(code, "unknown")))
+        elif cmd in CMD_NAMES or cmd == CMD_NACK:
+            if cmd == CMD_GET_INFO and len(data) >= 6:
+                self.info = tuple(data[1:6])
+            if cmd == CMD_GET_CONFIG:
+                cfg = parse_config(data)
+                if cfg:
+                    self.config[1 if cfg["pending"] else 0] = cfg
+            # A NACK is filed under the command it rejects, so request() sees it.
+            self.replies[data[1] if cmd == CMD_NACK and len(data) >= 2 else cmd] = bytes(data)
 
     # --- sending ---
 
@@ -577,7 +730,9 @@ class Driver:
     def send_start(self):
         self._send(self.cmd_id, bytes([CMD_START_FOC]))
 
-    def send_current(self, mine, other=0.0, mode="normal"):
+    def send_current(self, mine, other=NAN, mode="normal"):
+        """This node's current frame: `mine` in our slot, `other` (default NaN =
+        no command) in the partner node's slot. Mode 'nan' puts NaN in ours."""
         if mode == "short":
             data = struct.pack(">f", mine)  # 4 bytes: must be ignored by the driver
         else:
@@ -585,12 +740,13 @@ class Driver:
             buf[self.offset:self.offset + 4] = struct.pack(">f", math.nan if mode == "nan" else mine)
             buf[4 - self.offset:8 - self.offset] = struct.pack(">f", other)
             data = bytes(buf)
-        self._send(BOTH_MOTOR_ID, data)
+        self._send(self.cur_id, data)
 
-    def run(self, seconds, mine=0.0, other=0.0, mode="normal", until=None):
+    def run(self, seconds, mine=0.0, other=NAN, mode="normal", until=None, tx=None):
         """Send the command every interval (mode 'none' sends nothing) and
         process received frames for `seconds`. Returns True if `until()`
-        became true first."""
+        became true first. `tx`, if given, is called every interval instead
+        of sending this node's current frame (e.g. to drive several nodes)."""
         now = time.monotonic()
         end = now + seconds
         next_tx = now
@@ -598,17 +754,84 @@ class Driver:
             if self.should_abort is not None and self.should_abort():
                 raise Aborted()
             if mode != "none" and now >= next_tx:
-                self.send_current(mine, other, mode)
+                if tx is not None:
+                    tx()
+                else:
+                    self.send_current(mine, other, mode)
                 next_tx += self.interval
                 if next_tx < now:
                     next_tx = now + self.interval
             frame = self.bus.recv(0.001)
             if frame is not None:
                 self._process(*frame)
+                for obs in self.observers:
+                    obs(*frame)
             if until is not None and until():
                 return True
             now = time.monotonic()
         return False
+
+    def request(self, payload, timeout_s=0.3):
+        """Send a configuration command, return its reply frame (or None).
+        Firmware 1.0 (protocol 1) doesn't answer them."""
+        cmd = payload[0]
+        self.replies.pop(cmd, None)
+        self._send(self.cmd_id, bytes(payload))
+        self.run(timeout_s, mode="none", until=lambda: cmd in self.replies)
+        return self.replies.get(cmd)
+
+    def set_node(self, node):
+        """Talk to another node ID from now on (e.g. after its node ID was changed and saved)."""
+        self.node = node
+        self.cur_id, self.offset, self.cmd_id, self.tele_id = node_ids(node)
+        self.last_state, self.last_status_time, self.info, self.config = None, None, None, {}
+
+    def configure(self, ops):
+        """Run configuration commands in order (each a payload, e.g.
+        set_param_payload(PARAM_INVERT, 1) or [CMD_SAVE]); stops at the first
+        failure. CMD_SAVE with a changed node ID follows the board to its new
+        ID once it has rebooted. Returns True if all succeeded."""
+        for op in ops:
+            op = bytes(op)
+            name = CMD_NAMES.get(op[0], "0x%02X" % op[0])
+            new_node = None
+            if op[0] == CMD_SAVE:
+                r = self.request([CMD_GET_CONFIG, 1])
+                pending = parse_config(r) if r else None
+                if pending and pending["node"] and pending["node"] != self.node:
+                    new_node = pending["node"]
+            r = self.request(op)
+            if r is None:
+                error("  node %d: no reply to %s (firmware 1.0 has no configuration over CAN)" % (self.node, name))
+                return False
+            status = reply_status(r)
+            text = decode_reply(r) or name
+            if status != 0:
+                error("  node %d: %s" % (self.node, text))
+                return False
+            info("  node %d: %s" % (self.node, text))
+            if op[0] in (CMD_SAVE, CMD_REBOOT):
+                old = self.node
+                if new_node:
+                    info("  node %d is now node %d: following it to commands 0x%03X / telemetry 0x%03X"
+                         % (old, new_node, *node_ids(new_node)[2:]))
+                    self.set_node(new_node)
+                info("  waiting for node %d to reboot..." % self.node)
+                self.run(0.5, mode="none")   # the old heartbeat stops ~20 ms after the reply
+                self.last_status_time = None
+                back = self.run(10.0, mode="none", until=lambda: self.last_status_time is not None)
+                if not back:
+                    error("  node %d did not come back within 10 s (check the serial console)" % self.node)
+                    return False
+                info("  node %d is back (state %s)" % (self.node, state_name(self.last_state)))
+        return True
+
+    def read_config(self):
+        """GET_CONFIG active + pending into self.config; False if no reply."""
+        ok = True
+        for which in (0, 1):
+            ok = self.request([CMD_GET_CONFIG, which]) is not None and ok
+        return ok
 
     def start_foc(self, timeout_s=START_TIMEOUT_S):
         """Returns (ok, seconds) - ok is None if no reply arrived."""
@@ -620,6 +843,69 @@ class Driver:
         if self.start_reply is None:
             return None, dt
         return self.start_reply == 1.0, dt
+
+
+class CommandWatch:
+    """Tracks the commands ANOTHER node (the robot's controller) sends: current
+    frames (0x010-0x017) and commands (0x021-0x02F), per target node. The
+    adapter never receives its own frames (elmue: they come back as Tx echoes;
+    python-can: receive_own_messages is off), so everything seen here came
+    from someone else."""
+
+    LATE_S = 0.1  # driver command timeout (COMMAND_TIMEOUT_MS)
+
+    def __init__(self):
+        self.current = {}       # node -> last commanded current (A); NaN slots are not commands
+        self.last_time = {}     # node -> time of the last real (non-NaN) command
+        self.late = {}          # node -> gaps longer than the driver's command timeout
+        self.max_gap = {}       # node -> longest gap since take_max_gap()
+        self.count = 0          # valid current frames, total
+        self.invalid = 0        # current frames with the wrong length
+        self.last_frame_time = None
+        self.commands = {}      # node -> number of command frames (START_FOC, config, ...)
+        self.nodes_heard = {}   # node -> time its telemetry was last seen
+
+    def process(self, can_id, data):
+        now = time.monotonic()
+        if TELEMETRY_ID_BASE + NODE_MIN <= can_id <= TELEMETRY_ID_BASE + NODE_MAX:
+            self.nodes_heard[can_id - TELEMETRY_ID_BASE] = now
+            return
+        if is_current_frame(can_id):
+            if len(data) != 8:
+                self.invalid += 1
+                return
+            self.count += 1
+            self.last_frame_time = now
+            for node, pos in zip(current_frame_nodes(can_id), (0, 4)):
+                v = be_float(data, pos)
+                if v != v:
+                    continue  # NaN: no command for this node
+                prev = self.last_time.get(node)
+                if prev is not None:
+                    gap = now - prev
+                    self.max_gap[node] = max(self.max_gap.get(node, 0.0), gap)
+                    if gap > self.LATE_S:
+                        self.late[node] = self.late.get(node, 0) + 1
+                self.last_time[node] = now
+                self.current[node] = v
+            return
+        if COMMAND_ID_BASE + NODE_MIN <= can_id <= COMMAND_ID_BASE + NODE_MAX and data:
+            node = can_id - COMMAND_ID_BASE
+            self.commands[node] = self.commands.get(node, 0) + 1
+            emit("  another node sent %s to node %d" % (CMD_NAMES.get(data[0], "command 0x%02X" % data[0]), node),
+                 "prompt")
+
+    def active(self, node=None, max_age=0.5):
+        """Commands seen recently for `node`, or any current frame if node is None."""
+        t = self.last_frame_time if node is None else self.last_time.get(node)
+        return t is not None and time.monotonic() - t < max_age
+
+    def heard_recently(self, node, max_age=1.0):
+        t = self.nodes_heard.get(node)
+        return t is not None and time.monotonic() - t < max_age
+
+    def take_max_gap(self, node):
+        return self.max_gap.pop(node, 0.0)
 
 
 # ----------------------------------------------------------------------------
@@ -672,11 +958,18 @@ def cmd_auto(drv, args):
     drv.run(1.0, mode="none")
     if drv.status_count == 0:
         res.check(False, "Status heartbeat",
-                  "nothing received on 0x%03X. Check the side setting (`config` on serial), bitrate, "
+                  "nothing received on 0x%03X. Check the node ID (`config` on serial), bitrate, "
                   "termination, GND, and that nothing else holds the adapter." % drv.tele_id)
         return res.summary()
     res.check(8 <= drv.status_count <= 12, "Status heartbeat", "%d frames in 1 s (expect 10)" % drv.status_count)
     info("Driver state: %s, flags: %s" % (state_name(drv.last_state), flag_names(drv.last_flags)))
+    res.check(6000 <= drv.last_mv <= 30000, "Supply voltage in the heartbeat",
+              "%.2f V (expect 6-30 V; 0 = no reading, or firmware without the field)" % (drv.last_mv / 1000))
+    reply = drv.request([CMD_GET_INFO])
+    if res.check(reply is not None, "CMD_GET_INFO answered", decode_reply(reply) if reply else
+                 "no reply: firmware 1.0 (no configuration over CAN)"):
+        res.check(drv.info is not None and drv.info[0] >= 3, "CAN protocol 3 or later (node IDs)",
+                  "protocol %s" % (drv.info[0] if drv.info else "?"))
 
     # 2. Start FOC
     if not start_or_fail(drv, res):
@@ -707,8 +1000,8 @@ def cmd_auto(drv, args):
     v0 = abs(drv.last_vel)
     drv.run(2.0, 0.0, I)
     v1 = abs(drv.last_vel)
-    res.check(v1 <= v0 + 1.0, "Other motor's half of 0x020 is ignored",
-              "|vel| %.2f -> %.2f rad/s while %.2f A sent to the other side" % (v0, v1, I))
+    res.check(v1 <= v0 + 1.0, "Partner node's half of the current frame is ignored",
+              "|vel| %.2f -> %.2f rad/s while %.2f A sent to node %d" % (v0, v1, I, partner_node(drv.node)))
 
     # 7. Command timeout while spinning
     drv.run(2.0, I)
@@ -720,7 +1013,7 @@ def cmd_auto(drv, args):
     res.check(not drv.last_flags & FLAG_TIMEOUT, "Timeout clears when commands resume", flag_names(drv.last_flags))
 
     # 8. Short frames, 9. NaN
-    for mode, name in (("short", "4-byte 0x020 frames are ignored"), ("nan", "NaN current is ignored")):
+    for mode, name in (("short", "4-byte current frames are ignored"), ("nan", "NaN current is ignored")):
         drv.reset_window()
         drv.run(0.4, 0.0, mode=mode)
         res.check(drv.flags_seen & FLAG_TIMEOUT, name, flag_names(drv.flags_seen))
@@ -790,6 +1083,73 @@ def cmd_monitor(bus, args):
             last_print = now
 
 
+def cmd_info(drv, args):
+    drv.run(0.3, mode="none")
+    if drv.last_status_time is None:
+        error("No status from node %d on 0x%03X." % (drv.node, drv.tele_id))
+        return False
+    mv = drv.last_mv
+    info("Node %d: state %s, flags %s, supply %s" % (drv.node, state_name(drv.last_state), flag_names(drv.last_flags),
+                                                     "%.2f V" % (mv / 1000) if mv else "no reading"))
+    reply = drv.request([CMD_GET_INFO])
+    if reply is None:
+        warn("No CMD_GET_INFO reply: firmware 1.0 (no configuration over CAN).")
+        return True
+    info("  " + decode_reply(reply))
+    for which in (0, 1):
+        r = drv.request([CMD_GET_CONFIG, which])
+        info("  " + (decode_reply(r) if r else "no GET_CONFIG reply"))
+    return True
+
+
+def cmd_config(drv, args):
+    drv.run(0.3, mode="none")
+    if drv.last_status_time is None:
+        error("No status from node %d on 0x%03X." % (drv.node, drv.tele_id))
+        return False
+    ops = []
+    if args.set_node is not None:
+        if not NODE_MIN <= args.set_node <= NODE_MAX:
+            error("--set-node must be %d..%d" % (NODE_MIN, NODE_MAX))
+            return False
+        if args.set_node != drv.node:
+            other = Driver(drv.bus, args.set_node, args.interval, False)
+            drv.observers.append(other._process)
+            drv.run(0.3, mode="none")
+            drv.observers.remove(other._process)
+            if other.last_status_time is not None:
+                error("Node %d is already on the bus: two boards with one node ID can't be told apart." % args.set_node)
+                return False
+        ops.append(set_param_payload(PARAM_NODE_ID, args.set_node))
+    if args.set_invert is not None:
+        ops.append(set_param_payload(PARAM_INVERT, 1 if args.set_invert == "on" else 0))
+    if args.velocity_interval is not None:
+        ops.append(set_param_payload(PARAM_VELOCITY_INTERVAL_MS, args.velocity_interval))
+    if args.cal:
+        ops.append([CMD_CALIBRATION, CAL_STORE if args.cal == "store" else CAL_CLEAR])
+    if args.revert:
+        ops.append([CMD_REVERT])
+    if args.save:
+        ops.append([CMD_SAVE])
+    elif args.reboot:
+        ops.append([CMD_REBOOT])
+    if not ops:
+        warn("Nothing to change. Options: --set-node N, --set-invert on|off, --velocity-interval MS, "
+             "--cal store|clear, --revert, --save, --reboot")
+    ok = drv.configure(ops)
+    if drv.read_config():
+        for which in (0, 1):
+            c = drv.config.get(which)
+            if c:
+                info("  %s: node %s, invert %s, alignment %s%s" % (
+                    "pending" if which else "active ", c["node"] or "not set", "on" if c["invert"] else "off",
+                    ("stored (%s, zero angle %.4f)" % ("CCW" if c["sensor_ccw"] else "CW", c["zero_angle"]))
+                    if c["aligned"] else "none (aligns at Start FOC)", "   UNSAVED CHANGES" if c["unsaved"] and which else ""))
+        if drv.config.get(1, {}).get("unsaved") and not args.save:
+            warn("Pending changes are not saved yet: add --save (stops the motor and reboots the board).")
+    return ok
+
+
 def cmd_busoff(drv, args):
     res = Results()
     if not ensure_running(drv):
@@ -843,25 +1203,41 @@ def settings_from_args(args):
     return CanSettings(args.bitrate, args.sample_point, args.fd, args.data_bitrate, args.data_sample_point)
 
 
-def open_bus(args, settings):
+def open_bus(args, settings, listen_only=False):
     if args.backend == "elmue":
-        return ElmueBus(args.device, settings)
+        return ElmueBus(args.device, settings, listen_only)
     if not args.channel:
         raise SystemExit("--channel is required with --backend python-can")
-    return PyCanBus(args.interface, args.channel, settings)
+    return PyCanBus(args.interface, args.channel, settings, listen_only)
 
 
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["auto", "monitor", "run", "busoff", "list"])
-    ap.add_argument("--side", choices=["left", "right"], default="left", help="which driver to talk to (default left)")
+    ap.add_argument("command", choices=["auto", "monitor", "run", "busoff", "info", "config", "list"])
+    ap.add_argument("--node", type=int, help="CAN node ID of the driver, 1-15 (default 1)")
+    ap.add_argument("--side", choices=["left", "right"], help="shorthand for --node 1 (left) / 2 (right)")
     ap.add_argument("--current", type=float, default=0.3, help="current in A for run/auto/busoff (default 0.3)")
     ap.add_argument("--interval", type=int, default=10, help="command interval in ms, 1..90 (default 10)")
     ap.add_argument("-v", "--verbose", action="store_true", help="print every decoded frame")
+    c = ap.add_argument_group("config command")
+    c.add_argument("--set-node", type=int, help="new node ID 1-15 (pending until --save)")
+    c.add_argument("--set-invert", choices=["on", "off"], help="flip current/velocity sign (pending until --save)")
+    c.add_argument("--velocity-interval", type=int, help="velocity telemetry period 1-100 ms (runtime, not saved)")
+    c.add_argument("--cal", choices=["store", "clear"], help="store this boot's alignment / clear it (pending)")
+    c.add_argument("--revert", action="store_true", help="discard unsaved changes")
+    c.add_argument("--save", action="store_true", help="save pending settings (stops the motor, reboots)")
+    c.add_argument("--reboot", action="store_true", help="reboot the board (stops the motor)")
+    ap.add_argument("--listen-only", action="store_true",
+                    help="monitor: open the adapter in listen-only (silent) mode, no ACKs")
     add_bus_args(ap, here)
     args = ap.parse_args()
 
+    if args.node is not None and args.side is not None:
+        ap.error("use --node or --side, not both")
+    node = args.node if args.node is not None else SIDE_NODES.get(args.side, 1)
+    if not NODE_MIN <= node <= NODE_MAX:
+        ap.error("--node must be %d..%d" % (NODE_MIN, NODE_MAX))
     if not 1 <= args.interval <= 90:
         ap.error("--interval must be 1..90 ms (the driver's command timeout is 100 ms)")
     if abs(args.current) > 5:
@@ -880,10 +1256,13 @@ def main():
 
     settings = settings_from_args(args)
     settings.warn_if_not_driver()
-    bus = open_bus(args, settings)
+    if args.listen_only and args.command != "monitor":
+        ap.error("--listen-only only works with monitor (the other commands have to send)")
+    bus = open_bus(args, settings, args.listen_only)
 
-    drv = Driver(bus, args.side, args.interval, args.verbose)
-    info("MiniFOC %s: commands 0x%03X, telemetry 0x%03X" % (args.side, drv.cmd_id, drv.tele_id))
+    drv = Driver(bus, node, args.interval, args.verbose)
+    info("MiniFOC node %d: current frame 0x%03X bytes %d-%d, commands 0x%03X, telemetry 0x%03X"
+         % (node, drv.cur_id, drv.offset, drv.offset + 3, drv.cmd_id, drv.tele_id))
     ok = True
     try:
         if args.command == "auto":
@@ -892,12 +1271,16 @@ def main():
             ok = cmd_run(drv, args)
         elif args.command == "busoff":
             ok = cmd_busoff(drv, args)
+        elif args.command == "info":
+            ok = cmd_info(drv, args)
+        elif args.command == "config":
+            ok = cmd_config(drv, args)
         else:
             cmd_monitor(bus, args)
     except KeyboardInterrupt:
         info("Stopped.")
     finally:
-        if args.command != "monitor":
+        if args.command not in ("monitor", "info", "config"):
             try:
                 drv.send_current(0.0)  # leave the motor at 0 A
             except Exception:

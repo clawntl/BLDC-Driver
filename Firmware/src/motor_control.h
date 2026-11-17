@@ -31,6 +31,11 @@ void stopMotor();
 
 bool focRunning();
 
+// Period of the CMD_SHAFT_VELOCITY telemetry. Runtime only (set by the host
+// with PARAM_VELOCITY_INTERVAL_MS, back to the default after a reset).
+void setVelocityTelemetryIntervalMs(uint8_t ms);
+uint8_t velocityTelemetryIntervalMs();
+
 // DriverState / StatusFlag values from can_protocol.h, for the CAN heartbeat.
 uint8_t driverState();
 uint8_t statusFlags();

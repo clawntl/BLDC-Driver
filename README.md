@@ -36,12 +36,18 @@ It's the successor to [BLDC-Driver](https://github.com/clawntl/BLDC-Driver). The
 
 ## Firmware
 
-The firmware is ported from [BLDC-Driver](https://github.com/clawntl/BLDC-Driver/tree/main/Firmware) and uses the same CAN protocol, serial console and board settings, so the docs there ([firmware guide](https://github.com/clawntl/BLDC-Driver/blob/main/docs/firmware.md), [CAN protocol](https://github.com/clawntl/BLDC-Driver/blob/main/docs/can-protocol.md), [test routines](https://github.com/clawntl/BLDC-Driver/blob/main/docs/test-routines.md)) still apply. The differences on Mk2 are:
+The firmware is ported from [BLDC-Driver](https://github.com/engbuildspace/BLDC-Driver/tree/main/Firmware) firmware **1.2.0** (CAN protocol 3) and uses the same CAN protocol, serial console and board settings, so the docs there ([firmware guide](https://github.com/engbuildspace/BLDC-Driver/blob/main/docs/firmware.md), [CAN protocol](https://github.com/engbuildspace/BLDC-Driver/blob/main/docs/can-protocol.md), [test routines](https://github.com/engbuildspace/BLDC-Driver/blob/main/docs/test-routines.md)) still apply. A MiniFOC and a BLDC-Driver can share a bus and run with the same controller firmware. That covers:
+
+- **Node IDs 1-15:** currents in frame `0x010 + (n-1)/2` (NaN = no command for that node), commands on `0x020 + n`, telemetry on `0x100 + n`.
+- **Configuration over CAN:** firmware info, settings, node ID, invert, alignment store/clear, save, revert and reboot.
+- **Supply voltage** in the status heartbeat (mV).
+
+The differences on Mk2 are:
 
 - **Pins:** new mapping in [`Firmware/include/pins.h`](Firmware/include/pins.h). The user LED is on PB2.
 - **Encoder:** AS5047P instead of AS5048A.
 - **Current sense:** SimpleFOC `InlineCurrentSense` (3 mΩ shunts, INA241A3 at 50 V/V) instead of the DRV8316's low-side amplifiers.
-- **Supply voltage:** read from the INA226 over I²C instead of an ADC divider. The `config` console command also shows the live supply voltage and current.
+- **Supply voltage:** read from the INA226 over I²C instead of the V_SENS ADC divider, both at boot (PWM scaling) and every 100 ms for the CAN heartbeat. The INA226 does its own averaging, so there is no extra filter. The `config` console command also shows the live supply voltage and current.
 - **DRV8316 buck:** switched off, because 5 V comes from the AP63205.
 - **CAN transceiver:** its VIO pin is powered from PC13, so the firmware turns it on at boot.
 - **No DFU button GPIO:** BOOT is wired straight to BOOT0/CAN_RX. To enter DFU, hold BOOT and press RST, or type `dfu` in the serial console.
@@ -52,7 +58,68 @@ Build and flash from `Firmware/`:
 pio run -e driver -t upload
 ```
 
-Then configure the board over USB serial (`set side left|right`, `save`), the same as on BLDC-Driver.
+Then configure the board over USB serial (`set node 1-15`, or `set side left|right` for node 1/2, then `save`), the same as on BLDC-Driver. A board saved as left/right by older firmware comes up as node 1/2.
+
+The CAN bench test tools are in [`Firmware/tools/can_test`](Firmware/tools/can_test) (`minifoc_cantest.py`, and a GUI that drives two nodes at once or monitors a bus with the robot's controller on it).
+
+### Configuring a board
+
+Each board keeps its settings in the last flash page, so they survive reflashing:
+
+| Setting | What it does |
+|---|---|
+| **Node ID** (1-15) | Sets the board's CAN IDs (see below). Unset = CAN stays off. On a robot, node 1 is the left wheel and node 2 the right. |
+| **Invert** | Flips the sign of the current command and the reported velocity, so mirrored wheels can share one sign convention. |
+| **Alignment** | The encoder-to-rotor alignment found at Start FOC. When one is stored, later starts skip the alignment (the wheel doesn't move). |
+
+Changes are **pending** until saved. Saving stops the motor, writes flash and reboots the board.
+
+**Over USB serial** (`pio device monitor`, or any terminal on the board's USB COM port; this is the only option for a new board, whose CAN is off until it has a node ID):
+
+```
+config              show firmware version, active and pending settings, CAN IDs, supply
+set node 3          node ID 1-15 (set side left / right = node 1 / 2)
+set invert on       on | off
+cal store           keep this boot's alignment (FOC must be running)
+cal clear           forget it: the next Start FOC aligns again
+save                write the pending settings and reboot
+help                all commands
+```
+
+**Over CAN** (firmware 1.1 or later), with the bench test tools in `Firmware/tools/can_test`:
+
+- GUI (`python minifoc_cantest_gui.py`): connect in Control mode and press **Settings...** on the board's panel. Use **Set node**, **Set invert** or the Alignment buttons, then **Save & reboot**. If the node ID changed, the panel follows the board to its new ID. **Re-run alignment...** walks through clearing the alignment, letting Start FOC align, and storing the result.
+- Command line:
+
+  ```
+  python minifoc_cantest.py --node 1 info                          # version + settings
+  python minifoc_cantest.py --node 1 config --set-node 3 --save    # node 1 becomes node 3
+  python minifoc_cantest.py --node 3 config --set-invert on --save
+  python minifoc_cantest.py --node 3 config --cal clear --save     # then Start FOC aligns...
+  python minifoc_cantest.py --node 3 config --cal store --save     # ...and this keeps it
+  ```
+
+Never give two boards on the same bus the same node ID: their frames can't be told apart, and only USB serial can fix it. Both tools refuse a node ID that is already in use.
+
+### CAN protocol versions
+
+The protocol version is the CAN interface version (reported by `info`), separate from the firmware version:
+
+| Protocol | Firmware | Adds |
+|---|---|---|
+| 1 | 1.0 | Start FOC, current commands, velocity telemetry, status heartbeat, errors. Left/right boards: currents in `0x020`, telemetry `0x101` (left) / `0x100` (right). |
+| 2 | 1.1 | Configuration over CAN: `GET_INFO`, `GET_CONFIG`, `SET_PARAM`, `CALIBRATION`, `SAVE`, `REVERT`, `REBOOT`. The supply voltage also appears in the heartbeat. |
+| 3 | 1.2 | Node IDs 1-15 instead of left/right, so up to 15 boards fit on one bus. |
+
+For node *n* (protocol 3):
+
+| Frame | ID | Content |
+|---|---|---|
+| Current command | `0x010 + (n-1)/2` | Two floats: odd nodes use bytes 0-3, even nodes bytes 4-7. NaN = no command for that node. |
+| Commands | `0x020 + n` | Start FOC and the configuration commands |
+| Telemetry | `0x100 + n` | Velocity, status heartbeat (state, flags, supply mV), replies, errors |
+
+Nodes 1 and 2 share current frame `0x010`. Their commands go to `0x021` / `0x022` and their telemetry comes from `0x101` / `0x102`. Full details: BLDC-Driver's [CAN protocol](https://github.com/engbuildspace/BLDC-Driver/blob/main/docs/can-protocol.md).
 
 ## Known issues
 
