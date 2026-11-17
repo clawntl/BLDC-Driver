@@ -62,6 +62,65 @@ Then configure the board over USB serial (`set node 1-15`, or `set side left|rig
 
 The CAN bench test tools are in [`Firmware/tools/can_test`](Firmware/tools/can_test) (`minifoc_cantest.py`, and a GUI that drives two nodes at once or monitors a bus with the robot's controller on it).
 
+### Configuring a board
+
+Each board keeps its settings in the last flash page, so they survive reflashing:
+
+| Setting | What it does |
+|---|---|
+| **Node ID** (1-15) | Sets the board's CAN IDs (see below). Unset = CAN stays off. On a robot, node 1 is the left wheel and node 2 the right. |
+| **Invert** | Flips the sign of the current command and the reported velocity, so mirrored wheels can share one sign convention. |
+| **Alignment** | The encoder-to-rotor alignment found at Start FOC. When one is stored, later starts skip the alignment (the wheel doesn't move). |
+
+Changes are **pending** until saved. Saving stops the motor, writes flash and reboots the board.
+
+**Over USB serial** (`pio device monitor`, or any terminal on the board's USB COM port; this is the only option for a new board, whose CAN is off until it has a node ID):
+
+```
+config              show firmware version, active and pending settings, CAN IDs, supply
+set node 3          node ID 1-15 (set side left / right = node 1 / 2)
+set invert on       on | off
+cal store           keep this boot's alignment (FOC must be running)
+cal clear           forget it: the next Start FOC aligns again
+save                write the pending settings and reboot
+help                all commands
+```
+
+**Over CAN** (firmware 1.1 or later), with the bench test tools in `Firmware/tools/can_test`:
+
+- GUI (`python minifoc_cantest_gui.py`): connect in Control mode and press **Settings...** on the board's panel. Use **Set node**, **Set invert** or the Alignment buttons, then **Save & reboot**. If the node ID changed, the panel follows the board to its new ID. **Re-run alignment...** walks through clearing the alignment, letting Start FOC align, and storing the result.
+- Command line:
+
+  ```
+  python minifoc_cantest.py --node 1 info                          # version + settings
+  python minifoc_cantest.py --node 1 config --set-node 3 --save    # node 1 becomes node 3
+  python minifoc_cantest.py --node 3 config --set-invert on --save
+  python minifoc_cantest.py --node 3 config --cal clear --save     # then Start FOC aligns...
+  python minifoc_cantest.py --node 3 config --cal store --save     # ...and this keeps it
+  ```
+
+Never give two boards on the same bus the same node ID: their frames can't be told apart, and only USB serial can fix it. Both tools refuse a node ID that is already in use.
+
+### CAN protocol versions
+
+The protocol version is the CAN interface version (reported by `info`), separate from the firmware version:
+
+| Protocol | Firmware | Adds |
+|---|---|---|
+| 1 | 1.0 | Start FOC, current commands, velocity telemetry, status heartbeat, errors. Left/right boards: currents in `0x020`, telemetry `0x101` (left) / `0x100` (right). |
+| 2 | 1.1 | Configuration over CAN: `GET_INFO`, `GET_CONFIG`, `SET_PARAM`, `CALIBRATION`, `SAVE`, `REVERT`, `REBOOT`. The supply voltage also appears in the heartbeat. |
+| 3 | 1.2 | Node IDs 1-15 instead of left/right, so up to 15 boards fit on one bus. |
+
+For node *n* (protocol 3):
+
+| Frame | ID | Content |
+|---|---|---|
+| Current command | `0x010 + (n-1)/2` | Two floats: odd nodes use bytes 0-3, even nodes bytes 4-7. NaN = no command for that node. |
+| Commands | `0x020 + n` | Start FOC and the configuration commands |
+| Telemetry | `0x100 + n` | Velocity, status heartbeat (state, flags, supply mV), replies, errors |
+
+Nodes 1 and 2 share current frame `0x010`. Their commands go to `0x021` / `0x022` and their telemetry comes from `0x101` / `0x102`. Full details: BLDC-Driver's [CAN protocol](https://github.com/engbuildspace/BLDC-Driver/blob/main/docs/can-protocol.md).
+
 ## Known issues
 
 This is hardware revision **Rev 01** (Mk2). Known problems will be listed here and fixed in Mk3. See [MK3.md](MK3.md) for planned Mk3 changes.

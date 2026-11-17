@@ -17,6 +17,8 @@ picked before connecting:
            to 0 A). STOP (or Esc) sends 0 A to both, stops sending and aborts
            a running test. Auto test / Bus-off test run per side, the same
            sequences as the CLI. "Info" reads the firmware version.
+           "Settings..." changes the board's settings over CAN (node ID,
+           invert, alignment, save/revert/reboot; firmware 1.1+).
   Monitor  The robot's controller stays on the bus and in charge; the GUI
            sends nothing. Shows what the controller commands per node
            (currents, gaps longer than the 100 ms timeout, START_FOC and
@@ -94,8 +96,8 @@ class Worker(threading.Thread):
     def _should_abort(self):
         return self.stop_flag or (self.busy is not None and self.abort_flag)
 
-    def submit(self, task, side=None):
-        self.tasks.put((task, side))
+    def submit(self, task, side=None, arg=None):
+        self.tasks.put((task, side, arg))
 
     def sending(self):
         return not self.monitor and any(self.send_enabled.values())
@@ -146,7 +148,7 @@ class Worker(threading.Thread):
         try:
             while not self.stop_flag:
                 try:
-                    task, side = self.tasks.get_nowait()
+                    task, side, arg = self.tasks.get_nowait()
                 except queue.Empty:
                     task = None
 
@@ -163,7 +165,7 @@ class Worker(threading.Thread):
                 self.busy = task + ((" " + side) if side else "")
                 self.abort_flag = False
                 try:
-                    self._run_task(task, side)
+                    self._run_task(task, side, arg)
                 except core.Aborted:
                     if not self.stop_flag:
                         core.emit("Aborted.", "warn")
@@ -186,7 +188,7 @@ class Worker(threading.Thread):
             self.bus.close()
             core.emit("Disconnected.", "dim")
 
-    def _run_task(self, task, side):
+    def _run_task(self, task, side, arg=None):
         if task == "start_both":
             self._start_both()
             return
@@ -197,6 +199,16 @@ class Worker(threading.Thread):
         drv = self.drv[side]
         if task == "info":
             self._info(side)
+            return
+        if task == "read_config":
+            drv.read_config()
+            return
+        if task == "config":
+            core.emit("==== Settings %s (node %d) ====" % (side, drv.node), "prompt")
+            if any(op[0] in (core.CMD_SAVE, core.CMD_REBOOT) for op in arg):
+                self.send_enabled = {s: False for s in SIDES}   # the board stops its motor anyway
+            drv.configure(arg)
+            drv.read_config()
             return
         cur = self.current[side]
         args = types.SimpleNamespace(current=cur if abs(cur) >= 0.05 else 0.3,
@@ -338,9 +350,11 @@ class SidePanel:
         self.btn_busoff.pack(side="right", padx=2)
         self.btn_info = ttk.Button(q, text="Info", command=lambda: app.submit("info", side))
         self.btn_info.pack(side="right", padx=2)
+        self.btn_settings = ttk.Button(q, text="Settings...", command=lambda: app.open_settings(side))
+        self.btn_settings.pack(side="right", padx=2)
 
         self.controls = [self.btn_start, self.chk_send, self.scale, self.btn_auto, self.btn_busoff,
-                         self.btn_info] + self.quick_buttons
+                         self.btn_info, self.btn_settings] + self.quick_buttons
 
     def node(self):
         """The node ID in the spinbox, or None if it isn't a valid one."""
@@ -358,6 +372,207 @@ class SidePanel:
         cur_id, off, cmd_id, tele_id = core.node_ids(n)
         self.lbl_ids.configure(text="currents 0x%03X [%d-%d], commands 0x%03X, telemetry 0x%03X"
                                     % (cur_id, off, off + 3, cmd_id, tele_id))
+
+
+# ----------------------------------------------------------------------------
+# Settings window (configuration over CAN, firmware 1.1+ / protocol 2+)
+# ----------------------------------------------------------------------------
+
+class SettingsDialog:
+    """Reads and changes one board's settings. Node ID, invert and the
+    alignment change the PENDING settings; "Save & reboot" makes them active
+    (the board stops its motor, writes flash and resets)."""
+
+    def __init__(self, app, side):
+        self.app = app
+        self.side = side
+        self.win = tk.Toplevel(app.root)
+        self.win.resizable(False, False)
+        self.win.protocol("WM_DELETE_WINDOW", self.close)
+        self.win.bind("<Escape>", lambda e: app.stop_motor())
+        f = ttk.Frame(self.win, padding=8)
+        f.pack(fill="both", expand=True)
+
+        self.lbl_title = tk.Label(f, text="", font=("Segoe UI", 11, "bold"), anchor="w")
+        self.lbl_title.grid(row=0, column=0, columnspan=4, sticky="we")
+        self.lbl_fw = tk.Label(f, text="", anchor="w", fg="#666666")
+        self.lbl_fw.grid(row=1, column=0, columnspan=4, sticky="we")
+
+        g = ttk.LabelFrame(f, text="Current settings")
+        g.grid(row=2, column=0, columnspan=4, sticky="we", pady=(6, 4))
+        self.lbl_active = tk.Label(g, text="active:  -", anchor="w", font=("Consolas", 9))
+        self.lbl_active.pack(fill="x", padx=4)
+        self.lbl_pending = tk.Label(g, text="pending: -", anchor="w", font=("Consolas", 9))
+        self.lbl_pending.pack(fill="x", padx=4)
+
+        e = ttk.LabelFrame(f, text="Change (pending until Save & reboot)")
+        e.grid(row=3, column=0, columnspan=4, sticky="we", pady=4)
+        ttk.Label(e, text="Node ID").grid(row=0, column=0, sticky="w", padx=4, pady=2)
+        self.node_var = tk.IntVar(value=core.SIDE_NODES[side])
+        ttk.Spinbox(e, from_=core.NODE_MIN, to=core.NODE_MAX, textvariable=self.node_var, width=5).grid(
+            row=0, column=1, sticky="w", padx=4)
+        self.btn_node = ttk.Button(e, text="Set node", command=self.set_node)
+        self.btn_node.grid(row=0, column=2, padx=4)
+        ttk.Label(e, text="changes the board's CAN IDs after the reboot", foreground="#666666").grid(
+            row=0, column=3, sticky="w", padx=4)
+
+        ttk.Label(e, text="Invert").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+        self.invert_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(e, text="on", variable=self.invert_var).grid(row=1, column=1, sticky="w", padx=4)
+        self.btn_invert = ttk.Button(e, text="Set invert", command=self.set_invert)
+        self.btn_invert.grid(row=1, column=2, padx=4)
+        ttk.Label(e, text="flips the sign of the current command and the reported velocity",
+                  foreground="#666666").grid(row=1, column=3, sticky="w", padx=4)
+
+        ttk.Label(e, text="Alignment").grid(row=2, column=0, sticky="w", padx=4, pady=2)
+        self.btn_cal_store = ttk.Button(e, text="Store this boot's",
+                                        command=lambda: self.run([[core.CMD_CALIBRATION, core.CAL_STORE]]))
+        self.btn_cal_store.grid(row=2, column=1, padx=4, sticky="w")
+        self.btn_cal_clear = ttk.Button(e, text="Clear",
+                                        command=lambda: self.run([[core.CMD_CALIBRATION, core.CAL_CLEAR]]))
+        self.btn_cal_clear.grid(row=2, column=2, padx=4)
+        ttk.Label(e, text="store needs FOC running; with none stored, Start FOC aligns (wheel moves)",
+                  foreground="#666666").grid(row=2, column=3, sticky="w", padx=4)
+
+        r = ttk.LabelFrame(f, text="Runtime (applies at once, back to default after a reset)")
+        r.grid(row=4, column=0, columnspan=4, sticky="we", pady=4)
+        ttk.Label(r, text="Velocity telemetry (ms)").grid(row=0, column=0, sticky="w", padx=4, pady=2)
+        self.vel_var = tk.IntVar(value=10)
+        ttk.Spinbox(r, from_=1, to=100, textvariable=self.vel_var, width=5).grid(row=0, column=1, sticky="w", padx=4)
+        self.btn_vel = ttk.Button(r, text="Set", command=self.set_velocity_interval)
+        self.btn_vel.grid(row=0, column=2, padx=4)
+
+        b = ttk.Frame(f)
+        b.grid(row=5, column=0, columnspan=4, sticky="we", pady=(6, 0))
+        self.btn_save = ttk.Button(b, text="Save & reboot", command=self.save)
+        self.btn_save.pack(side="left", padx=2)
+        self.btn_revert = ttk.Button(b, text="Revert", command=lambda: self.run([[core.CMD_REVERT]]))
+        self.btn_revert.pack(side="left", padx=2)
+        self.btn_reboot = ttk.Button(b, text="Reboot", command=self.reboot)
+        self.btn_reboot.pack(side="left", padx=2)
+        self.btn_realign = ttk.Button(b, text="Re-run alignment...", command=self.realign)
+        self.btn_realign.pack(side="left", padx=(12, 2))
+        self.btn_refresh = ttk.Button(b, text="Refresh", command=self.refresh)
+        self.btn_refresh.pack(side="right", padx=2)
+        self.buttons = [self.btn_node, self.btn_invert, self.btn_cal_store, self.btn_cal_clear, self.btn_vel,
+                        self.btn_save, self.btn_revert, self.btn_reboot, self.btn_realign, self.btn_refresh]
+
+        self._loaded_for = None     # node whose settings filled the edit fields
+        self.refresh()
+
+    def drv(self):
+        w = self.app.worker
+        return w.drv[self.side] if w else None
+
+    def run(self, ops):
+        self.app.submit("config", self.side, [bytes(op) for op in ops])
+
+    def refresh(self):
+        self.app.submit("read_config", self.side)
+
+    def set_node(self):
+        try:
+            n = int(self.node_var.get())
+        except (tk.TclError, ValueError):
+            n = 0
+        d = self.drv()
+        if d is None:
+            return
+        if not core.NODE_MIN <= n <= core.NODE_MAX:
+            messagebox.showerror("MiniFOC", "Node ID must be %d..%d." % (core.NODE_MIN, core.NODE_MAX), parent=self.win)
+            return
+        if n != d.node and self.app.worker.watch.heard_recently(n):
+            messagebox.showerror("MiniFOC", "Node %d is already on the bus. Two boards with the same node ID can't "
+                                            "be told apart (only USB serial `set node` can fix that)." % n,
+                                 parent=self.win)
+            return
+        self.run([core.set_param_payload(core.PARAM_NODE_ID, n)])
+
+    def set_invert(self):
+        self.run([core.set_param_payload(core.PARAM_INVERT, 1 if self.invert_var.get() else 0)])
+
+    def set_velocity_interval(self):
+        try:
+            ms = int(self.vel_var.get())
+        except (tk.TclError, ValueError):
+            ms = 0
+        if not 1 <= ms <= 100:
+            messagebox.showerror("MiniFOC", "1..100 ms.", parent=self.win)
+            return
+        self.run([core.set_param_payload(core.PARAM_VELOCITY_INTERVAL_MS, ms)])
+
+    def save(self):
+        d = self.drv()
+        pend = d.config.get(1) if d else None
+        msg = "Save the pending settings to flash?\n\nThe board stops its motor and reboots."
+        if pend and pend["node"] and pend["node"] != d.node:
+            msg += ("\n\nIts node ID changes from %d to %d; this panel follows it to the new ID."
+                    % (d.node, pend["node"]))
+        if messagebox.askokcancel("MiniFOC", msg, parent=self.win):
+            self.run([[core.CMD_SAVE]])
+
+    def reboot(self):
+        if messagebox.askokcancel("MiniFOC", "Reboot the board? Its motor stops. Unsaved changes are lost.",
+                                  parent=self.win):
+            self.run([[core.CMD_REBOOT]])
+
+    def realign(self):
+        d = self.drv()
+        if d is None:
+            return
+        if d.last_state == core.STATE_RUNNING and not (d.config.get(0) or {}).get("aligned"):
+            # Step 2: this boot aligned (nothing was stored) -> keep it.
+            if messagebox.askokcancel("MiniFOC", "FOC is running with a fresh alignment (none was stored).\n\n"
+                                                 "Store it and save? The board reboots and uses it from then on.",
+                                      parent=self.win):
+                self.run([[core.CMD_CALIBRATION, core.CAL_STORE], [core.CMD_SAVE]])
+            return
+        if messagebox.askokcancel(
+                "MiniFOC", "Re-running the sensor alignment takes three steps:\n\n"
+                           "1. Now: clear the stored alignment and save (the board reboots).\n"
+                           "2. Press Start FOC: with nothing stored the board aligns (the wheel moves a little).\n"
+                           "3. Press 'Re-run alignment...' again to store the new alignment and save.\n\n"
+                           "Do step 1 now?", parent=self.win):
+            self.run([[core.CMD_CALIBRATION, core.CAL_CLEAR], [core.CMD_SAVE]])
+
+    def update(self):
+        """Called from the App's UI tick."""
+        d = self.drv()
+        w = self.app.worker
+        can_use = w is not None and not w.monitor and w.busy is None
+        for b in self.buttons:
+            self.app._set_enabled(b, can_use)
+        if d is None:
+            self.app._set_label(self.lbl_title, text="%s motor: not connected" % self.side.capitalize())
+            return
+        self.win.title("MiniFOC settings - %s (node %d)" % (self.side, d.node))
+        self.app._set_label(self.lbl_title, text="%s motor, node %d   (commands 0x%03X, telemetry 0x%03X)" % (
+            self.side.capitalize(), d.node, d.cmd_id, d.tele_id))
+        self.app._set_label(self.lbl_fw, text=(
+            "firmware %d.%d.%d, CAN protocol %d, image %d KB" % (d.info[1], d.info[2], d.info[3], d.info[0], d.info[4])
+            if d.info else "firmware: unknown (press Info / Refresh; no reply = firmware 1.0, use USB serial)"))
+        for which, lbl, name in ((0, self.lbl_active, "active: "), (1, self.lbl_pending, "pending:")):
+            c = d.config.get(which)
+            if not c:
+                self.app._set_label(lbl, text="%s -" % name, fg="black")
+                continue
+            text = "%s node %-3s invert %-4s alignment %s" % (
+                name, c["node"] or "-", "on" if c["invert"] else "off",
+                ("stored (%s, zero angle %.4f)" % ("CCW" if c["sensor_ccw"] else "CW", c["zero_angle"]))
+                if c["aligned"] else "none (Start FOC aligns)")
+            unsaved = which == 1 and c["unsaved"]
+            self.app._set_label(lbl, text=text + ("   <- UNSAVED" if unsaved else ""),
+                                fg="#b58900" if unsaved else "black")
+        # Fill the edit fields once per node from its pending settings.
+        pend = d.config.get(1)
+        if pend and self._loaded_for != d.node:
+            self._loaded_for = d.node
+            self.node_var.set(pend["node"] or d.node)
+            self.invert_var.set(pend["invert"])
+
+    def close(self):
+        self.app.settings.pop(self.side, None)
+        self.win.destroy()
 
 
 # ----------------------------------------------------------------------------
@@ -381,6 +596,7 @@ class App:
         self._ctrl_was_active = False
         self._ctrl_warned = 0.0
         self._gaps = {}
+        self.settings = {}          # side -> open SettingsDialog
         self.device_labels = []     # elmue adapters, index = --device
         core.set_output(lambda text, kind: self.log_queue.put((text, kind)))
 
@@ -678,13 +894,21 @@ class App:
         d = self.worker.drv[side] if self.worker else None
         return d is not None and d.last_status_time is not None and time.monotonic() - d.last_status_time < FRESH_S
 
-    def submit(self, task, side=None):
+    def open_settings(self, side):
+        dlg = self.settings.get(side)
+        if dlg is not None:
+            dlg.win.lift()
+            dlg.refresh()
+            return
+        self.settings[side] = SettingsDialog(self, side)
+
+    def submit(self, task, side=None, arg=None):
         w = self.worker
         if w is None or w.busy or w.monitor:
             return
         if task == "auto":
             partner = core.partner_node(w.drv[side].node)
-            if partner in w.watch.nodes_heard:
+            if w.watch.heard_recently(partner):
                 if not messagebox.askokcancel(
                         "MiniFOC", "Node %d is on the bus too, and shares node %d's current frame.\n\n"
                                    "The auto test's step 6 sends current to node %d to check that node %d ignores it, "
@@ -695,7 +919,7 @@ class App:
             for p in self.panels.values():
                 p.send_var.set(False)
             self._apply_all()
-        w.submit(task, side)
+        w.submit(task, side, arg)
 
     def abort_task(self):
         if self.worker is not None and self.worker.busy:
@@ -757,6 +981,8 @@ class App:
         self._update_status()
         self._draw_plot()
         self._update_widgets()
+        for dlg in list(self.settings.values()):
+            dlg.update()
         self.root.after(UI_PERIOD_MS, self.tick)
 
     def _drain_log(self):
@@ -817,12 +1043,19 @@ class App:
                 ctrl += ", wrong length: %d" % watch.invalid
         else:
             ctrl = "no current frames from another node" if w.monitor else ""
-        heard = sorted(watch.nodes_heard)
+        heard = sorted(n for n in watch.nodes_heard if watch.heard_recently(n, 2.0))
         if heard:
             ctrl += "   nodes heard: " + ", ".join(str(n) for n in heard)
         task = ("   running: " + w.busy) if w.busy else ""
         self._set_label(self.lbl_bus, text="adapter CAN errors: %d   %s%s" % (w.bus.adapter_errors, ctrl, task),
                         fg="#dc322f" if (not w.monitor and ctrl_active) else "#666666")
+
+        # A board whose node ID was changed and saved: the Driver followed it.
+        for s, p in self.panels.items():
+            if p.node() != w.drv[s].node:
+                p.node_var.set(w.drv[s].node)
+                p.update_ids()
+                self._was_fresh[s] = False
 
         # Per side
         state_bg = {core.STATE_RUNNING: "#9be29b", core.STATE_IDLE: "#f0f0f0", core.STATE_FAULT: "#f3a6a6"}
