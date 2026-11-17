@@ -8,9 +8,6 @@
 // Found as "board_config.h" through -I boards/minifoc_mk2 (see board.ini here).
 // See docs/firmware.md#boards for what a board header has to define.
 
-#include "board_ids.h"
-
-#define BOARD_ID      BOARD_ID_MINIFOC
 #define BOARD_HW_REV  2 // Mk2
 #define BOARD_MODEL   "MiniFOC Mk2"   // reported over CAN, max 30 characters
 

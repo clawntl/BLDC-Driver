@@ -12,7 +12,7 @@ MiniFOC is a round, motor-mounted version of BLDC-Driver: the same **STM32G431**
 | Schematic | [`schematic.pdf`](../../Hardware/minifoc_mk2/schematic.pdf) |
 | Firmware environments | `minifoc_mk2`, `minifoc_mk2_test` |
 | Board config | [`Firmware/boards/minifoc_mk2/board_config.h`](../../Firmware/boards/minifoc_mk2/board_config.h) |
-| Reported over CAN | Model "MiniFOC Mk2", board ID 2, hardware rev 2, capabilities `CAP_SUPPLY_VOLTAGE`, `CAP_INPUT_CURRENT` |
+| Reported over CAN | Model "MiniFOC Mk2", hardware rev 2, capabilities `CAP_SUPPLY_VOLTAGE`, `CAP_INPUT_CURRENT` |
 
 ## Features
 

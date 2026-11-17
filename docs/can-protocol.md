@@ -11,7 +11,7 @@ The protocol version is reported by `CMD_GET_INFO`, separately from the firmware
 | 1 | 1.0 | Start FOC, current commands, velocity telemetry, status heartbeat, errors. Left/right boards |
 | 2 | 1.1 | Configuration over CAN (`CMD_GET_INFO` … `CMD_REBOOT`); the supply voltage in the heartbeat |
 | 3 | 1.2 | Node IDs 1–15 instead of left/right (the IDs below) |
-| 4 | 1.3 | `CMD_GET_BOARD_INFO` (model name, capabilities); input current in the heartbeat on boards with `CAP_INPUT_CURRENT`; board ID and revision in `CMD_GET_INFO` |
+| 4 | 1.3 | `CMD_GET_BOARD_INFO` (model name, capabilities); input current in the heartbeat on boards with `CAP_INPUT_CURRENT` |
 
 ## Basics
 
@@ -67,7 +67,7 @@ These are sent on the board's command ID (`0x021` or `0x022`). The reply comes b
 
 | CMD | Name | Request | Reply |
 |---|---|---|---|
-| `0x20` | `CMD_GET_INFO` | `[0x20]` | `[0x20][protocol][fw major][fw minor][fw patch][image KB][board ID][hw rev]` |
+| `0x20` | `CMD_GET_INFO` | `[0x20]` | `[0x20][protocol][fw major][fw minor][fw patch][image KB][0][0]` |
 | `0x21` | `CMD_GET_CONFIG` | `[0x21][0 = active, 1 = pending]` | `[0x21][which][node ID, 0 = not set][config flags][zero electric angle, float]` |
 | `0x22` | `CMD_SET_PARAM` | `[0x22][param][float value]` | `[0x22][param][status][float value now]` |
 | `0x23` | `CMD_CALIBRATION` | `[0x23][1 = store, 2 = clear]` | `[0x23][op][status]` |
@@ -143,7 +143,7 @@ With this command a host can show and use any board without keeping its own list
 
 | Page | Reply |
 |---|---|
-| 0 | `[0x27][0][capabilities, uint32 big-endian][board ID][hardware rev]` |
+| 0 | `[0x27][0][capabilities, uint32 big-endian][hardware rev][0]` |
 | 1–5 | `[0x27][page][6 characters of the model name]`: characters 0–5, 6–11 and so on, NUL-padded after the end |
 | other | `[0xFE][0x27][2]` (bad value) |
 
@@ -156,7 +156,7 @@ Capability bits:
 | 0 | `CAP_SUPPLY_VOLTAGE` | The heartbeat supply voltage is a measurement |
 | 1 | `CAP_INPUT_CURRENT` | The heartbeat carries the input current (bytes 5–6) |
 
-New bits are added when a board gains something a host can use. A host should ignore bits it doesn't know. It should decide what to expect from the capability bits, never from the board ID. Firmware before protocol 4 answers `CMD_GET_BOARD_INFO` with a NACK.
+New bits are added when a board gains something a host can use. A host should ignore bits it doesn't know. It should decide what to expect from the capability bits, never from the model name. Firmware before protocol 4 answers `CMD_GET_BOARD_INFO` with a NACK.
 
 ### Status flags (status byte 2)
 

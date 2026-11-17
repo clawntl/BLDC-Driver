@@ -165,7 +165,7 @@ static void replyGetInfo() {
     const uint32_t kb = (firmwareImageBytes() + 1023) / 1024;
     const uint8_t frame[8] = { CMD_GET_INFO, CAN_PROTOCOL_VERSION,
                                FIRMWARE_VERSION_MAJOR, FIRMWARE_VERSION_MINOR, FIRMWARE_VERSION_PATCH,
-                               (uint8_t)min<uint32_t>(kb, 255), BOARD_ID, BOARD_HW_REV };
+                               (uint8_t)min<uint32_t>(kb, 255), 0, 0 };
     sendFrame(frame, sizeof(frame), telemetryCanId());
 }
 
@@ -177,8 +177,7 @@ static void replyGetBoardInfo(uint8_t page) {
         frame[3] = (uint8_t)(caps >> 16);
         frame[4] = (uint8_t)(caps >> 8);
         frame[5] = (uint8_t)caps;
-        frame[6] = BOARD_ID;
-        frame[7] = BOARD_HW_REV;
+        frame[6] = BOARD_HW_REV;   // frame[7] reserved, 0
     } else if (page <= 5) {
         // Characters (page-1)*6 .. +5 of the model name, NUL-padded.
         const char *model = boardModel();

@@ -170,7 +170,7 @@ ERROR_NAMES = {
 }
 
 # CMD_GET_BOARD_INFO capability bits (protocol 4+). The tools decide what to
-# show from these, never from the board ID, so a new board needs no changes
+# show from these, never from the model name, so a new board needs no changes
 # here. Unknown bits are shown as numbers.
 CAP_SUPPLY_VOLTAGE = 1 << 0   # heartbeat supply mV is a measurement
 CAP_INPUT_CURRENT  = 1 << 1   # heartbeat bytes 5-6: input current, int16 mA
@@ -226,14 +226,11 @@ def decode_reply(data):
     """Configuration replies (protocol 2+), or None."""
     c = data[0]
     if c == CMD_GET_INFO and len(data) >= 6:
-        text = "info: protocol %d, firmware %d.%d.%d, image %d KB" % tuple(data[1:6])
-        if len(data) >= 8 and data[6]:
-            text += ", board ID %d rev %d" % (data[6], data[7])
-        return text
+        return "info: protocol %d, firmware %d.%d.%d, image %d KB" % tuple(data[1:6])
     if c == CMD_GET_BOARD_INFO and len(data) >= 8:
         if data[1] == 0:
-            return "board info: ID %d rev %d, capabilities %s" % (
-                data[6], data[7], cap_names(int.from_bytes(bytes(data[2:6]), "big")))
+            return "board info: hardware rev %d, capabilities %s" % (
+                data[6], cap_names(int.from_bytes(bytes(data[2:6]), "big")))
         return "board name part %d: %r" % (data[1], bytes(data[2:8]).split(b"\0")[0].decode("ascii", "replace"))
     if c == CMD_GET_CONFIG and len(data) >= 8:
         f = data[3]
@@ -690,8 +687,8 @@ class Driver:
         self.last_status_time = None
         self.last_mv = 0             # supply mV from the heartbeat (0 = no reading)
         self.replies = {}            # last configuration reply per command byte
-        self.info = None             # (protocol, major, minor, patch, image KB, board ID, hw rev) from CMD_GET_INFO
-        self.board = None            # {"caps", "id", "rev", "model"} from CMD_GET_BOARD_INFO (protocol 4+)
+        self.info = None             # (protocol, major, minor, patch, image KB) from CMD_GET_INFO
+        self.board = None            # {"caps", "rev", "model"} from CMD_GET_BOARD_INFO (protocol 4+)
         self.last_ma = None          # input mA from the heartbeat (None = not reported)
         self.start_reply = None
         self.errors = []
@@ -744,7 +741,7 @@ class Driver:
             error("  node %d reported error %d (%s)" % (self.node, code, ERROR_NAMES.get(code, "unknown")))
         elif cmd in CMD_NAMES or cmd == CMD_NACK:
             if cmd == CMD_GET_INFO and len(data) >= 6:
-                self.info = tuple(data[1:8]) + (0,) * (8 - max(len(data), 6))
+                self.info = tuple(data[1:6])
             if cmd == CMD_GET_CONFIG:
                 cfg = parse_config(data)
                 if cfg:
@@ -875,7 +872,7 @@ class Driver:
         if r is None or r[0] != CMD_GET_BOARD_INFO or len(r) < 8:
             self.board = None
             return None
-        board = {"caps": int.from_bytes(bytes(r[2:6]), "big"), "id": r[6], "rev": r[7], "model": ""}
+        board = {"caps": int.from_bytes(bytes(r[2:6]), "big"), "rev": r[6], "model": ""}
         name = b""
         for page in range(1, 6):
             p = self.request([CMD_GET_BOARD_INFO, page])
@@ -893,8 +890,6 @@ class Driver:
         """Model name as the board reports it, or a fallback for older firmware."""
         if self.board and self.board["model"]:
             return self.board["model"]
-        if self.info and len(self.info) >= 7 and self.info[5]:
-            return "board ID %d rev %d" % (self.info[5], self.info[6])
         return "board not reported (firmware before 1.3)" if self.info else ""
 
     def has_cap(self, bit):
@@ -1174,8 +1169,8 @@ def cmd_info(drv, args):
     info("  " + decode_reply(reply))
     board = drv.read_board_info()
     if board:
-        info("  board: %s (ID %d rev %d), capabilities: %s" % (
-            board["model"] or "?", board["id"], board["rev"], cap_names(board["caps"])))
+        info("  board: %s (hardware rev %d), capabilities: %s" % (
+            board["model"] or "?", board["rev"], cap_names(board["caps"])))
     else:
         info("  board: %s" % drv.board_label())
     for which in (0, 1):

@@ -12,7 +12,7 @@ An **AS5048A** magnetic encoder sits on a break-away tab. With the tab removed, 
 | Schematic | [`schematic_v0.2.pdf`](../../Hardware/bldc_driver_v02/schematic_v0.2.pdf) |
 | Firmware environments | `bldc_driver_v02`, `bldc_driver_v02_test` |
 | Board config | [`Firmware/boards/bldc_driver_v02/board_config.h`](../../Firmware/boards/bldc_driver_v02/board_config.h) |
-| Reported over CAN | Model "BLDC-Driver v0.2", board ID 1, hardware rev 2, capabilities `CAP_SUPPLY_VOLTAGE` |
+| Reported over CAN | Model "BLDC-Driver v0.2", hardware rev 2, capabilities `CAP_SUPPLY_VOLTAGE` |
 
 ## Features
 

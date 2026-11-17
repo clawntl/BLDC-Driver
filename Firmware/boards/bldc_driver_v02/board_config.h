@@ -7,9 +7,6 @@
 // Found as "board_config.h" through -I boards/bldc_driver_v02 (see board.ini here).
 // See docs/firmware.md#boards for what a board header has to define.
 
-#include "board_ids.h"
-
-#define BOARD_ID      BOARD_ID_BLDC_DRIVER
 #define BOARD_HW_REV  2 // v0.2
 #define BOARD_MODEL   "BLDC-Driver v0.2"   // reported over CAN, max 30 characters
 

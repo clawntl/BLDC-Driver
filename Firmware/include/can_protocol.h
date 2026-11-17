@@ -60,8 +60,7 @@ enum CAN_CMD : uint8_t {
     // telemetry ID with the same command byte. Status bytes are CONFIG_*.
 
     // [0x20] -> [0x20][protocol version][fw major][fw minor][fw patch]
-    //           [image size, KB][board ID][board hardware revision]
-    // Board ID: BOARD_ID_* in board_ids.h. Firmware before 1.3.0 sends 0, 0.
+    //           [image size, KB][0][0]
     CMD_GET_INFO = 0x20,
 
     // [0x21][0 = active, 1 = pending] ->
@@ -92,7 +91,7 @@ enum CAN_CMD : uint8_t {
 
     // Board description (protocol 4), so a host needs no table of boards:
     // [0x27][page] ->
-    //   page 0:    [0x27][0][capabilities, uint32 big-endian (CAP_*)][board ID][hw rev]
+    //   page 0:    [0x27][0][capabilities, uint32 big-endian (CAP_*)][hw rev][0]
     //   page 1-5:  [0x27][page][6 characters of the model name, e.g. "MiniFO"]
     //              (pages 1-5 = characters 0-29; NUL-padded after the end, so
     //              stop at the first page containing a NUL)

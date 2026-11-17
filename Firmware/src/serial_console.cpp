@@ -60,9 +60,7 @@ void printConfig() {
     Serial.println(" bytes");
     Serial.print("Board:   ");
     Serial.print(BOARD_MODEL);
-    Serial.print(" (board ID ");
-    Serial.print(BOARD_ID);
-    Serial.print(", hardware rev ");
+    Serial.print(" (hardware rev ");
     Serial.print(BOARD_HW_REV);
     Serial.print(", capabilities 0x");
     Serial.print(boardCapabilities(), HEX);

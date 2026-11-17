@@ -155,7 +155,7 @@ Firmware/boards/
 | | [BLDC-Driver v0.2](boards/bldc_driver_v02.md) | [MiniFOC Mk2](boards/minifoc_mk2.md) |
 |---|---|---|
 | Folder | `bldc_driver_v02` | `minifoc_mk2` |
-| Board ID / hardware rev | 1 / 2 | 2 / 2 |
+| Model / hardware rev | BLDC-Driver v0.2 / 2 | MiniFOC Mk2 / 2 |
 | Encoder | AS5048A, 5 MHz SPI | AS5047P, 8 MHz SPI |
 | Phase current sense | DRV8316 low-side CSAs, 600 mV/A | Inline 3 mΩ shunts + INA241A3 (50 V/V) |
 | Supply sensing | V_SENS divider on ADC1 | INA226 on I2C1 (voltage and input current) |
@@ -179,7 +179,7 @@ The rest of the firmware only uses the interfaces, so it never checks which boar
 
 ### What a board header defines
 
-- `BOARD_ID` (from `include/board_ids.h`), `BOARD_HW_REV` and `BOARD_MODEL` (up to 30 characters). The host reads these with `CMD_GET_BOARD_INFO`.
+- `BOARD_MODEL` (up to 30 characters) and `BOARD_HW_REV`. The host reads these with `CMD_GET_BOARD_INFO`.
 - The pin map: `LED_BUILTIN`, SPI1, `DRV_CS`, `ENC_CS`, `CAN_EN`, `CAN_RX_BOOT0`, the six PWM pins and `SO_A/B/C`.
 - One part of each kind, plus that part's constants:
   - an encoder with `ENCODER_SPI_HZ`;
@@ -204,12 +204,12 @@ A variant that differs in a few values, such as other shunts, another encoder or
 #define CURRENT_SENSE_SHUNT_OHMS 0.002f
 ```
 
-Its `board.ini` is a copy of the base board's, with the folder name changed. A variant keeps the board ID of its base; a host tells them apart by `BOARD_MODEL` and the capability bits.
+Its `board.ini` is a copy of the base board's, with the folder name changed. Give a variant its own `BOARD_MODEL`, so a host can tell it from its base.
 
 ### Adding a board
 
 1. Copy the folder of the closest board in `boards/`, or make it a variant as above.
-2. Edit `board_config.h`: pins, parts and constants. For a new board design (not a variant), add a number to `include/board_ids.h` (never reuse one) and set `BOARD_HW_REV` and `BOARD_MODEL`.
+2. Edit `board_config.h`: `BOARD_MODEL`, `BOARD_HW_REV`, pins, parts and constants.
 3. Edit `board.ini`: rename both environments and the `-I boards/...` path, and set `USB_PRODUCT`.
 4. If the board has a part the firmware doesn't know yet, add a file in `src/parts/` that implements the interface in `src/hw/`, guarded by a new macro (copy a similar part). If the part gives the host something new, such as an IMU, give it a capability bit in `can_protocol.h` and add it to `boardCapabilities()` in `hw/board_info.cpp`.
 5. Build the new environments, then bring the board up with its `_test` environment and the [test routines](test-routines.md).
@@ -232,7 +232,6 @@ The host tools need no changes: they show the model name and use the capability 
 | `src/clock_config.cpp` | 160 MHz clock tree from the 16 MHz HSE |
 | `src/motor_test/` | Bench-test firmware (`_test` environments only) |
 | `boards/<name>/` | Each board's `board_config.h` (pins, parts) and `board.ini` (build environments) |
-| `include/board_ids.h` | Board ID registry |
 | `lib/ACANFD_STM32_G431/` | FDCAN driver, a fork of ACANFD-STM32 trimmed to this board |
 
 ### Flash size limit
