@@ -29,7 +29,7 @@
 
 // Firmware version, reported by CMD_GET_INFO and the serial `config` command.
 #define FIRMWARE_VERSION_MAJOR 1
-#define FIRMWARE_VERSION_MINOR 2
+#define FIRMWARE_VERSION_MINOR 3
 #define FIRMWARE_VERSION_PATCH 0
 
 #define CAN_BIT_RATE     1'000'000 // 1 Mbit/s classic CAN 2.0B (no FD / bit rate switch used)
@@ -55,7 +55,8 @@ enum CAN_CMD : uint8_t {
     // telemetry ID with the same command byte. Status bytes are CONFIG_*.
 
     // [0x20] -> [0x20][protocol version][fw major][fw minor][fw patch]
-    //           [image size, KB][0][0]
+    //           [image size, KB][board ID][board hardware revision]
+    // Board ID: BOARD_ID_* in board_ids.h. Firmware before 1.3.0 sends 0, 0.
     CMD_GET_INFO = 0x20,
 
     // [0x21][0 = active, 1 = pending] ->
@@ -140,4 +141,6 @@ enum CAN_ERROR : uint8_t {
     ERR_CURRENT_SENSE     = 2, // current sense init failed
     ERR_FOC_INIT          = 3, // initFOC() failed (sensor/current-sense alignment)
     ERR_DRIVER_FAULT      = 4, // DRV8316 fault flag set
+    ERR_DRIVER_SPI        = 5, // DRV8316 not answering over SPI at Start FOC (no motor
+                               // supply, or firmware built for a different board)
 };

@@ -5,8 +5,9 @@
 #include <cstring>
 #include <strings.h>
 
+#include "board.h"
 #include "board_settings.h"
-#include "supply_monitor.h"
+#include "hw/supply.h"
 #include "can_bus.h"
 #include "can_protocol.h"
 #include "dfu.h"
@@ -56,6 +57,13 @@ void printConfig() {
     Serial.print("), image ");
     Serial.print(firmwareImageBytes());
     Serial.println(" bytes");
+    Serial.print("Board:   ");
+    Serial.print(BOARD_MODEL);
+    Serial.print(" (board ID ");
+    Serial.print(BOARD_ID);
+    Serial.print(", hardware rev ");
+    Serial.print(BOARD_HW_REV);
+    Serial.println(")");
     const BoardSettings &active  = activeSettings();
     const BoardSettings &pending = pendingSettings();
 
@@ -89,9 +97,20 @@ void printConfig() {
     const uint8_t flags = statusFlags();
     Serial.print("Supply:  ");
     Serial.print(supplyVoltageNow(), 2);
-    Serial.print(" V now, ");
+    Serial.print(" V now");
+#if defined(SUPPLY_HAS_CURRENT)
+    float iin;
+    if (readSupplyCurrent(iin)) {
+        Serial.print(", ");
+        Serial.print(iin, 3);
+        Serial.print(" A drawn");
+    }
+#endif
+    Serial.print(", ");
     Serial.print(measuredSupplyVoltage(), 2);
-    Serial.println(" V at boot (used for PWM scaling)");
+    Serial.print(" V at boot (used for PWM scaling; ");
+    Serial.print(supplySensorName());
+    Serial.println(")");
     Serial.print("Current: ");
     Serial.print(commandedCurrent(), 3);
     Serial.print(" A commanded");

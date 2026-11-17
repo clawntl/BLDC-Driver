@@ -5,11 +5,12 @@
 #include <ACANFD_STM32.h>          // -> fdcan1 object, pins PB8(RX)/PB9(TX)
 #include <ACANFD_STM32_Settings.h> // -> ACANFD_STM32_Settings, DataBitRateFactor
 
+#include "board.h"
 #include "can_protocol.h"
 #include "motor_control.h"
 #include "motor_config.h"
 #include "board_settings.h"
-#include "supply_monitor.h"
+#include "hw/supply.h"
 #include "dfu.h"
 
 #include <IWatchdog.h>
@@ -159,7 +160,7 @@ static void replyGetInfo() {
     const uint32_t kb = (firmwareImageBytes() + 1023) / 1024;
     const uint8_t frame[8] = { CMD_GET_INFO, CAN_PROTOCOL_VERSION,
                                FIRMWARE_VERSION_MAJOR, FIRMWARE_VERSION_MINOR, FIRMWARE_VERSION_PATCH,
-                               (uint8_t)min<uint32_t>(kb, 255), 0, 0 };
+                               (uint8_t)min<uint32_t>(kb, 255), BOARD_ID, BOARD_HW_REV };
     sendFrame(frame, sizeof(frame), telemetryCanId());
 }
 

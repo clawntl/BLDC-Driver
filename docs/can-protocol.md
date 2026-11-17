@@ -53,7 +53,7 @@ These are sent on the board's command ID (`0x021` or `0x022`). The reply comes b
 
 | CMD | Name | Request | Reply |
 |---|---|---|---|
-| `0x20` | `CMD_GET_INFO` | `[0x20]` | `[0x20][protocol][fw major][fw minor][fw patch][image KB][0][0]` |
+| `0x20` | `CMD_GET_INFO` | `[0x20]` | `[0x20][protocol][fw major][fw minor][fw patch][image KB][board ID][hw rev]` |
 | `0x21` | `CMD_GET_CONFIG` | `[0x21][0 = active, 1 = pending]` | `[0x21][which][node ID, 0 = not set][config flags][zero electric angle, float]` |
 | `0x22` | `CMD_SET_PARAM` | `[0x22][param][float value]` | `[0x22][param][status][float value now]` |
 | `0x23` | `CMD_CALIBRATION` | `[0x23][1 = store, 2 = clear]` | `[0x23][op][status]` |
@@ -135,6 +135,7 @@ The voltage is measured through the V_SENS divider. Before FOC starts it is read
 | 2 | `ERR_CURRENT_SENSE` | Current-sense initialisation failed |
 | 3 | `ERR_FOC_INIT` | `initFOC()` failed (sensor or current-sense alignment) |
 | 4 | `ERR_DRIVER_FAULT` | DRV8316 fault flag set (over-current, over-temperature, undervoltage and so on; the details are printed on the serial console) |
+| 5 | `ERR_DRIVER_SPI` | Start FOC refused: the DRV8316 doesn't answer over SPI. Either there is no motor supply, or the firmware was built for a different board (firmware 1.3.0 and later) |
 
 ## Typical sequence
 

@@ -7,7 +7,7 @@ Work through the steps **in order**. Each one relies on the ones before it, so i
 > [!NOTE]
 > **Reference values.** The expected readings come from a v0.2 board running a 12 V supply with an 11-pole-pair gimbal-style motor (5.3 Ω between motor wires) and the on-board AS5048A. Values that depend on the motor are marked, and [Appendix A](#appendix-a-choosing-test-voltages) explains how to adapt them to a different motor. Readings that depend only on the board, such as current-sense offsets and DRV8316 flags, should match on any board.
 
-For building, flashing and configuring the `driver` firmware, see the [Firmware guide](firmware.md). For pins, connectors and buttons, see the [Hardware guide](hardware.md).
+For building, flashing and configuring the `driver` firmware, see the [Firmware guide](firmware.md). Here `motor_test` means your board's `_test` environment (`bldc_driver_v02_test`, or `minifoc_mk2_test` on a MiniFOC) and `driver` its firmware environment (`bldc_driver_v02` / `minifoc_mk2`). For pins, connectors and buttons, see the [Hardware guide](hardware.md).
 
 ---
 
@@ -63,13 +63,13 @@ Once the readings are good, reconnect the motor.
    - **Blank or unresponsive board:** hold **BOOT**, tap **RST**, then release **BOOT**.
 3. From the `Firmware/` directory, run:
    ```bash
-   pio run -e motor_test -t upload
+   pio run -e bldc_driver_v02_test -t upload
    ```
 4. Open the serial monitor at **115200** baud:
    ```bash
-   pio device monitor -e motor_test
+   pio device monitor -e bldc_driver_v02_test
    ```
-5. The monitor shows `BLDC test firmware ready - press Enter to start` every 2 s. **Press Enter.**
+5. The monitor shows `BLDC-Driver v0.2 test firmware ready - press Enter to start` (or `MiniFOC Mk2 ...`) every 2 s. **Press Enter.**
 
 | If… | Likely cause |
 |---|---|
@@ -112,7 +112,7 @@ Type `s`.
 | Expected with **no magnet** |
 |---|
 | `parityErr=0 cmdInvalid=0 framingErr=0` |
-| `compHigh=1`, `AGC=255`, a small `magnitude` (below ~100). `OCF` may read 0 |
+| `fieldWeak=1`, `AGC=255`, a small `magnitude` (below ~100). `offsetReady` may read 0 |
 | Warning lines saying the field is too weak |
 
 | If… | Likely cause |
@@ -131,7 +131,7 @@ Type `s`.
 
 | Expected | Notes |
 |---|---|
-| `OCF=1 COF=0 compLow=0 compHigh=0` | The field is in range |
+| `offsetReady=1 COF=0 fieldWeak=0 fieldStrong=0` | The field is in range |
 | `AGC` somewhere between ~**20 and ~200** | Reference: 50–53. The line ends `OK: field in range, AGC has headroom both ways` |
 | `magnitude` ≈ 4500–4800 | |
 
@@ -143,8 +143,8 @@ Type `s`.
 
 | If… | Likely cause |
 |---|---|
-| `compHigh=1`, or AGC at or near 255 | The field is too **weak**: the gap is too large, the magnet is too small, or it isn't diametrically magnetised (see below) |
-| `compLow=1`, or AGC at or near 0 | The field is too **strong**: the magnet is too close, so increase the gap |
+| `fieldWeak=1`, or AGC at or near 255 | The field is too **weak**: the gap is too large, the magnet is too small, or it isn't diametrically magnetised (see below) |
+| `fieldStrong=1`, or AGC at or near 0 | The field is too **strong**: the magnet is too close, so increase the gap |
 | AGC rises and falls once per turn (e.g. between 45 and 80) | The magnet is **off-centre or tilted**, or the shaft wobbles. Reseat the magnet |
 | The angle barely changes as you turn the shaft | The magnet is **axially** magnetised, with its poles on the flat faces. It must be **diametric**, with the poles on the curved sides. To test: an axial disc snaps flat onto steel, while a diametric one prefers to sit on its edge |
 
@@ -358,7 +358,7 @@ Open loop drives the motor **without using the encoder**. It checks the DRV8316,
 
 1. Type `dfu`, then flash the `driver` firmware from the `Firmware/` directory:
    ```bash
-   pio run -e driver -t upload
+   pio run -e bldc_driver_v02 -t upload
    ```
 2. If this is a new board, configure it as described in [Firmware guide: First-time setup](firmware.md#first-time-setup). Use your note from step 9.4 to choose the `invert` setting.
 3. Fill in the record sheet and keep it with the board.
@@ -424,7 +424,7 @@ Board ID: ______________   Motor: ______________   Date: __________   Tester: __
 
 1  Motor resistance   A–B ____ Ω   B–C ____ Ω   A–C ____ Ω                              [ ] OK
 3  VIN                reported ____ V   meter ____ V                                     [ ] OK
-4  s (no magnet)      compHigh=1, no SPI errors                                          [ ] OK
+4  s (no magnet)      fieldWeak=1, no SPI errors                                          [ ] OK
 5  s (magnet)         AGC at 8 positions: ___ ___ ___ ___ ___ ___ ___ ___                 [ ] OK
    n                  spread ____ counts   glitches ____                                 [ ] OK
    w                  ~6.28/turn, no glitches                                            [ ] OK

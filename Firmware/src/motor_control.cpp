@@ -5,15 +5,12 @@
 #include <IWatchdog.h>
 #include <cmath>
 
-#include "encoders/as5048a/MagneticSensorAS5048A.h"
-#include "drivers/drv8316/drv8316.h"
-
-#include "pins.h"
+#include "board.h"
+#include "hw/board_hw.h"
+#include "hw/supply.h"
 #include "can_protocol.h"
 #include "can_bus.h"
 #include "motor_config.h"
-#include "supply_voltage.h"
-#include "supply_monitor.h"
 #include "board_settings.h"
 
 static SPIClass SPI_1(SPI1_MOSI, SPI1_MISO, SPI1_SCK);
@@ -26,13 +23,10 @@ BLDCMotor motor = BLDCMotor(MOTOR_POLE_PAIRS);
 //  - phB_h, phC_l - C phase pwm pin high/low pair
 static DRV8316Driver6PWM driver = DRV8316Driver6PWM(PHA_H, PHA_L, PHB_H, PHB_L, PHC_H, PHC_L, DRV_CS, false);
 
-// 600 mV/A matches the DRV8316 CSA gain register code used in setupFOC()
-// (Gain_0V25). The DRV8316 datasheet's gain table had an erratum: the real
-// gains for codes 0..3 are 0.15 / 0.3 / 0.6 / 1.2 V/A, so the SimpleFOCDrivers
-// enum name (0V25) is misleading - code 0b10 is 0.6 V/A. See motor_test.cpp.
-static LowsideCurrentSense current_sense = LowsideCurrentSense(600.0, SO_A, SO_B, SO_C);
+// Current sense and encoder types come from the board header (see hw/board_hw.h).
+static BoardCurrentSense current_sense(BOARD_CURRENT_SENSE_ARGS);
 
-static MagneticSensorAS5048A sensor(ENC_CS, false, SPISettings(5'000'000, MSBFIRST, SPI_MODE1));
+static BoardEncoder sensor(BOARD_ENCODER_ARGS);
 
 // Commanded current (A, already direction-corrected). Only written through
 // setTargetCurrent() and the command timeout.
@@ -47,6 +41,7 @@ static bool start_requested = false;
 static bool calibration_used = false;
 static bool command_timed_out = false;
 static bool drv_fault = false;
+static bool drv_responding = false;
 
 static float supply_voltage = 0;
 
@@ -114,6 +109,14 @@ static void printDRV8316Status() {
 	Serial.println(lock);
 }
 
+static void printDrvNotRespondingWarning() {
+    Serial.println("WARNING: the DRV8316 isn't answering over SPI (register read-back failed).");
+    Serial.println("         Is the motor supply connected? If it is, this firmware may have been");
+    Serial.print  ("         built for a different board (this build: ");
+    Serial.print  (BOARD_MODEL);
+    Serial.println("). Start FOC will retry and refuse to run until it answers.");
+}
+
 void setupFOC() {
     // initialise magnetic sensor hardware
     sensor.init(&SPI_1);
@@ -121,38 +124,21 @@ void setupFOC() {
     motor.linkSensor(&sensor);
 
     // Measure the real supply so SimpleFOC's volts -> PWM duty conversion is
-    // correct. Must happen before current_sense.init() (see supply_voltage.h).
+    // correct. Must happen before current_sense.init() (see hw/supply.h).
     supply_voltage = measuredSupplyVoltageOrDefault();
     driver.voltage_power_supply = supply_voltage;
     driver.voltage_limit = min(MOTOR_VOLTAGE_LIMIT, driver.voltage_power_supply);
-    // Live VIN for the CAN heartbeat (analogRead() until the current sense starts).
-    initSupplyMonitor();
 
     driver.init(&SPI_1);
 
     // small delay to allow SPI response
     delay(10);
 
-    // Set the buck output tot 5V
-    driver.setBuckVoltage(VB_5V);
-    // Wait some time for everything to stabilise
-    delay(500);
+    // Buck, protection, slew, PWM mode, CSA gain (see hw/drv8316_setup.cpp).
+    configureDRV8316(driver);
 
-    // It's advised to have at least 400ns between read and write calls
-    driver.setOCPLevel(Curr_16A);
-    delayMicroseconds(1);
-    driver.setOCPMode(AutoRetry_Fault);
-    delayMicroseconds(1);
-    driver.setOCPRetryTime(Retry500ms);
-    delayMicroseconds(1);
-    driver.setSlew(Slew_200Vus);
-    delayMicroseconds(1);
-    driver.setPWM100Frequency(FREQ_20KHz);
-    delayMicroseconds(1);
-    driver.setCurrentSenseGain(Gain_0V25); // register code 0b10 = 0.6 V/A (datasheet erratum, see current_sense above)
-    delayMicroseconds(1);
-    driver.setPWMMode(PWM6_Mode);
-    delayMicroseconds(1);
+    drv_responding = drv8316Responding(driver);
+    if (!drv_responding) printDrvNotRespondingWarning();
 
     Serial.println("Init complete...");
 
@@ -195,16 +181,31 @@ static bool startFOC() {
     // Not running yet: make sure nothing stale gets applied on the first move().
     target_current = 0;
 
+    // Without a DRV8316 answering on DRV_CS the PWM pins would still drive
+    // whatever is connected, with the wrong (or no) current sense. Typical
+    // causes: no motor supply at boot (registers were never written, so write
+    // them again now), or firmware built for another board.
+    if (!drv_responding) {
+        configureDRV8316(driver);
+        drv_responding = drv8316Responding(driver);
+        if (!drv_responding) {
+            printDrvNotRespondingWarning();
+            sendError(ERR_DRIVER_SPI);
+            return false;
+        }
+        Serial.println("DRV8316 now answering (registers written again).");
+    }
+
     if (!motor.init()) {
         Serial.println("Motor init failed!");
         sendError(ERR_MOTOR_INIT);
         return false;
     }
 
-    // From here on ADC1 belongs to the current sense: the supply monitor
-    // switches to regular conversions (and analogRead() must not be used).
+    // Some supply sensors share the ADC with the current sense and have to
+    // know when it has taken over (see hw/supply.h).
     const bool csOk = current_sense.init();
-    supplyMonitorCurrentSenseStarted();
+    supplyCurrentSenseStarted();
     if (csOk)  Serial.println("Current sense init success!");
     else {
         Serial.println("Current sense init failed!");

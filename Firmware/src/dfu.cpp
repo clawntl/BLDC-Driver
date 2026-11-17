@@ -6,7 +6,7 @@
 #include "stm32g4xx_hal.h" // needed for HAL_DeInit / rebootToDFU
 #include <IWatchdog.h>
 
-#include "pins.h"
+#include "board.h"
 
 // Magic left in a TAMP backup register to ask the next boot to go straight to
 // the bootloader. Backup registers keep their contents across a system reset.
@@ -117,6 +117,13 @@ void checkDfuRequestAtBoot() {
     }
 }
 
+#if defined(HAS_DFU_BUTTON)
+void initDfuButton() {
+    // Idle high, pressed = low. Internal pull-up so the pin can't float (and
+    // randomly reboot into DFU) if there's no external pull-up fitted.
+    pinMode(DFU_BUTTON, INPUT_PULLUP);
+}
+
 void checkDfuButton() {
     static bool dfuButtonPrevState = HIGH;
 
@@ -127,3 +134,7 @@ void checkDfuButton() {
     }
     dfuButtonPrevState = dfuButtonState;
 }
+#else
+void initDfuButton() { }
+void checkDfuButton() { }
+#endif

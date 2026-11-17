@@ -28,7 +28,7 @@ The board includes an optional **AS5048A** magnetic encoder on a break-away tab.
 | [`Hardware/`](Hardware) | KiCad project for the v0.2 board (schematic, PCB, custom footprints and symbols) |
 | [`Hardware/production/`](Hardware/production) | Fabrication outputs: Gerber zip, BOM and pick-and-place files (JLCPCB/LCSC part numbers) |
 | [`schematic_v0.2.pdf`](schematic_v0.2.pdf) | PDF export of the schematic |
-| [`Firmware/`](Firmware) | PlatformIO firmware: the CAN motor driver and a bench-test build |
+| [`Firmware/`](Firmware) | PlatformIO firmware: the CAN motor driver and a bench-test build, for this board and compatible ones such as [MiniFOC](https://github.com/clawntl/MiniFOC) |
 | [`Images/`](Images) | Pinout diagram |
 | [`docs/`](docs) | Detailed documentation (see below) |
 
@@ -48,7 +48,7 @@ The board includes an optional **AS5048A** magnetic encoder on a break-away tab.
    cd Firmware
    ```
    ```bash
-   pio run -e driver -t upload
+   pio run -e bldc_driver_v02 -t upload
    ```
 4. **Configure the board** over USB serial. The board boots unconfigured, with CAN disabled:
    ```bash

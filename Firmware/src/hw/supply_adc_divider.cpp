@@ -1,14 +1,36 @@
-#include "supply_monitor.h"
+// Supply sensing through a resistor divider on an ADC1 pin (BLDC-Driver):
+//   VIN -> R17 100k -> PA3 (V_SENS) -> R16 10k -> GND   =>  V_PA3 = VIN / 11
+//
+// V_SENS is on ADC1 together with the SOA/SOB/SOC current-sense pins, so it is
+// read in two different ways:
+//  - before the current sense has been initialised: analogRead() (it
+//    initialises and de-initialises ADC1 for every read, which is fine while
+//    nothing else uses ADC1);
+//  - afterwards: a software-triggered REGULAR conversion on ADC1. The current
+//    sense uses INJECTED conversions triggered by the PWM timer, which have
+//    priority and simply interrupt a regular conversion, so the two coexist.
+//    analogRead() must never be used again from that point: it would
+//    HAL_ADC_DeInit() ADC1 and silently break current sensing. That is why
+//    readSupplyVoltage() returns false once supplyCurrentSenseStarted() has
+//    been called.
+//
+// The regular conversion is started in one call and collected in a later one
+// (no busy-waiting in the FOC loop).
+
+#include "supply.h"
+
+#if defined(SUPPLY_SENSE_ADC_DIVIDER)
 
 #include <Arduino.h>
 #include <PeripheralPins.h>
 #include <stm32yyxx_ll_adc.h>
 
-#include "pins.h"
-#include "motor_config.h"
-#include "supply_voltage.h"
-
 namespace {
+
+// Each live sample is one ADC conversion (~7 us), so sampling often costs
+// nothing noticeable in the FOC loop; a first-order low-pass smooths it.
+constexpr uint32_t SAMPLE_INTERVAL_MS = 10;
+constexpr uint32_t FILTER_TAU_MS      = 200;
 
 float filtered = 0;
 bool haveValue = false;
@@ -21,8 +43,18 @@ bool converting = false;
 uint32_t channel = 0;
 uint32_t conversionStartMs = 0;
 
-float rawToVolts(uint32_t raw) {
+float rawToVolts(float raw) {
     return raw * (VSENS_ADC_REF_V / 4095.0f) * VSENS_DIVIDER_RATIO * VSENS_CALIBRATION;
+}
+
+// Averaged analogRead(). Only valid before the current sense starts.
+float readAveraged(uint16_t samples) {
+    if (samples == 0) samples = 1;
+    analogReadResolution(12);
+    analogRead(V_SENS);   // discard first conversion after (re)configuring the pin
+    uint32_t sum = 0;
+    for (uint16_t i = 0; i < samples; i++) sum += analogRead(V_SENS);
+    return rawToVolts(sum / (float)samples);
 }
 
 void addSample(float v) {
@@ -32,16 +64,17 @@ void addSample(float v) {
         return;
     }
     // First-order low-pass: alpha = dt / tau.
-    constexpr float alpha = (float)SUPPLY_SAMPLE_INTERVAL_MS / (float)SUPPLY_FILTER_TAU_MS;
+    constexpr float alpha = (float)SAMPLE_INTERVAL_MS / (float)FILTER_TAU_MS;
     filtered += alpha * (v - filtered);
 }
 
-// Points the ADC1 regular sequence at V_SENS with a long sample time.
-// SMPRx and SQRx may only be written while no conversion is ongoing
-// (ADSTART = 0 and JADSTART = 0, RM0440 21.4.12), so the injected (current
-// sense) conversions are stopped for the few microseconds this takes and then
-// re-armed. They are hardware-triggered by the PWM timer, so re-setting
-// JADSTART simply resumes them on the next trigger.
+// Points the ADC1 regular sequence at V_SENS with a long sample time (the
+// ~9 kohm divider has no filter capacitor, so the default 2.5-cycle sample
+// time would read low). SMPRx and SQRx may only be written while no
+// conversion is ongoing (ADSTART = 0 and JADSTART = 0, RM0440 21.4.12), so the
+// injected (current sense) conversions are stopped for the few microseconds
+// this takes and then re-armed. They are hardware-triggered by the PWM timer,
+// so re-setting JADSTART simply resumes them on the next trigger.
 bool configureRegularChannel() {
     const PinName pin = digitalPinToPinName(V_SENS);
     const uint32_t function = pinmap_function(pin, PinMap_ADC);
@@ -110,7 +143,9 @@ void sampleRegular(uint32_t now) {
 
 } // namespace
 
-void initSupplyMonitor() {
+const char *supplySensorName() { return "V_SENS"; }
+
+void supplyBegin() {
     // The first sample (one interval from now) seeds the filter. Not seeded
     // from measuredSupplyVoltageOrDefault(): that returns the 12 V fallback
     // when VIN is out of range (e.g. USB power only), which would be
@@ -118,7 +153,15 @@ void initSupplyMonitor() {
     lastSampleMs = millis();
 }
 
-void supplyMonitorCurrentSenseStarted() {
+bool readSupplyVoltage(float &volts) {
+    if (useRegular) return false; // analogRead() would break the current sense
+    volts = readAveraged(64);
+    return true;
+}
+
+bool readSupplyCurrent(float &) { return false; }
+
+void supplyCurrentSenseStarted() {
     useRegular = true;
     converting = false;
     regularReady = configureRegularChannel();
@@ -130,21 +173,15 @@ void updateSupplyMonitor() {
     if (useRegular) {
         // Start a conversion once the interval has passed; collect it on a
         // later call.
-        if (converting || now - lastSampleMs >= SUPPLY_SAMPLE_INTERVAL_MS) sampleRegular(now);
+        if (converting || now - lastSampleMs >= SAMPLE_INTERVAL_MS) sampleRegular(now);
         return;
     }
-    if (now - lastSampleMs < SUPPLY_SAMPLE_INTERVAL_MS) return;
+    if (now - lastSampleMs < SAMPLE_INTERVAL_MS) return;
     lastSampleMs = now;
     // Short burst: analogRead() takes ~10 us each at the long sample time.
-    addSample(readSupplyVoltage(4));
+    addSample(readAveraged(4));
 }
 
 float supplyVoltageNow() { return haveValue ? filtered : 0.0f; }
 
-uint16_t supplyMillivolts() {
-    if (!haveValue) return 0;
-    const float mv = filtered * 1000.0f;
-    if (mv < 1.0f) return 1;
-    if (mv > 65535.0f) return 65535;
-    return (uint16_t)lroundf(mv);
-}
+#endif // SUPPLY_SENSE_ADC_DIVIDER
