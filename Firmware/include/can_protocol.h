@@ -2,29 +2,34 @@
 
 #include <cstdint>
 
-// Which pair of identifiers a board uses is chosen at RUNTIME from the side
-// saved in its board settings (`set side left|right` over USB serial, see
-// board_settings.h), so the same firmware image runs on both drivers.
-
-// Host -> both drivers: 8 bytes = two big-endian floats, target current in A.
-// Bytes 0-3 are for the left motor, bytes 4-7 for the right motor.
-#define BOTH_MOTOR_CAN_ADDR     0x020
-
-// Host -> one driver: command frames ([CAN_CMD][payload...]).
-#define LEFT_MOTOR_CAN_ADDR     0x021
-#define RIGHT_MOTOR_CAN_ADDR    0x022
-
-// Driver -> host: telemetry/status frames ([CAN_CMD][payload...]).
-#define LEFT_MOTOR_SEND_TO      0x101
-#define RIGHT_MOTOR_SEND_TO     0x100
+// Each board has a NODE ID, 1-15, saved in its board settings (`set node N`
+// over USB serial, or PARAM_NODE_ID over CAN; see board_settings.h), so the
+// same firmware image runs on every board and a bus can carry up to 15.
+// Its identifiers follow from the node ID n:
+//
+//   Current command   CURRENT_FRAME_BASE + (n-1)/2   host -> boards, 8 bytes =
+//                     two big-endian floats [A]: odd n reads bytes 0-3, even n
+//                     bytes 4-7. NaN = no command for that node (ignored).
+//                     The lowest IDs, so they win arbitration over everything.
+//   Commands          COMMAND_ID_BASE + n            host -> board: [CAN_CMD][payload...]
+//   Telemetry/status  TELEMETRY_ID_BASE + n          board -> host: [CAN_CMD][payload...]
+//
+// Nodes 1 and 2 (e.g. a robot's left and right wheels) share current frame
+// 0x010, use commands 0x021 / 0x022 and telemetry 0x101 / 0x102.
+#define CURRENT_FRAME_BASE  0x010
+#define COMMAND_ID_BASE     0x020
+#define TELEMETRY_ID_BASE   0x100
+#define NODE_ID_MIN         1
+#define NODE_ID_MAX         15
 
 // Version of this protocol (reported by CMD_GET_INFO). 1 = start/telemetry/
-// status only (no CMD_GET_INFO reply); 2 = adds the configuration commands.
-#define CAN_PROTOCOL_VERSION 2
+// status only (no CMD_GET_INFO reply); 2 = adds the configuration commands;
+// 3 = node IDs instead of left/right (new current frame and telemetry IDs).
+#define CAN_PROTOCOL_VERSION 3
 
 // Firmware version, reported by CMD_GET_INFO and the serial `config` command.
 #define FIRMWARE_VERSION_MAJOR 1
-#define FIRMWARE_VERSION_MINOR 1
+#define FIRMWARE_VERSION_MINOR 2
 #define FIRMWARE_VERSION_PATCH 0
 
 #define CAN_BIT_RATE     1'000'000 // 1 Mbit/s classic CAN 2.0B (no FD / bit rate switch used)
@@ -54,11 +59,11 @@ enum CAN_CMD : uint8_t {
     CMD_GET_INFO = 0x20,
 
     // [0x21][0 = active, 1 = pending] ->
-    // [0x21][which][side (MotorSide)][CONFIG_FLAG_* bits][zero electric angle, float]
+    // [0x21][which][node ID (0 = not set)][CONFIG_FLAG_* bits][zero electric angle, float]
     CMD_GET_CONFIG = 0x21,
 
     // [0x22][PARAM_*][float value] -> [0x22][param][status][float value now]
-    // Saved parameters (side, invert) change the PENDING settings: they take
+    // Saved parameters (node ID, invert) change the PENDING settings: they take
     // effect after CMD_SAVE (which reboots). Runtime parameters apply at once
     // and are back to their defaults after a reset.
     CMD_SET_PARAM = 0x22,
@@ -89,7 +94,7 @@ enum CAN_CMD : uint8_t {
 
 // CMD_SET_PARAM parameter IDs.
 enum ConfigParam : uint8_t {
-    PARAM_SIDE   = 1,    // saved: 1 = left, 2 = right (changes the CAN IDs after the reboot!)
+    PARAM_NODE_ID = 1,   // saved: 1-15 (the board's CAN IDs change after the reboot!)
     PARAM_INVERT = 2,    // saved: 0 / 1
     PARAM_VELOCITY_INTERVAL_MS = 0x10, // runtime: CMD_SHAFT_VELOCITY period, 1-100 ms (default 10)
 };

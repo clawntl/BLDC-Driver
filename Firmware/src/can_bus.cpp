@@ -56,9 +56,8 @@ static uint32_t lastStatusSendMs = 0;
 static uint32_t lastBusCheckMs = 0;
 static bool busOffReported = false;
 
-// Accept only frames addressed to both motors (broadcast) or to this motor.
-// Equivalent to the old SimpleCAN mask filter (BOTH_MOTOR_CAN_ADDR / CAN_MASK),
-// but expressed directly as the two identifiers it actually let through.
+// Accept only this board's current frame (shared with one other node) and
+// its own command ID.
 void configureAndStartCAN() {
     // DataBitRateFactor::x1 -> data phase == arbitration phase (we never set BRS,
     // so only the arbitration-phase sample point below actually matters).
@@ -71,7 +70,7 @@ void configureAndStartCAN() {
     }
 
     ACANFD_STM32_StandardFilters stdFilters;
-    stdFilters.addDual(BOTH_MOTOR_CAN_ADDR, thisMotorCanAddr(), ACANFD_STM32_FilterAction::FIFO0);
+    stdFilters.addDual(currentFrameCanId(), commandCanId(), ACANFD_STM32_FilterAction::FIFO0);
 
     const uint32_t errorCode = fdcan1.beginFD(settings, stdFilters);
 
@@ -80,10 +79,14 @@ void configureAndStartCAN() {
     Serial.print(" bit/s, sample point: ");
     Serial.print(settings.arbitrationSamplePointFromBitStart());
     Serial.println(" %");
-    Serial.print("CAN IDs: commands 0x");
-    Serial.print(thisMotorCanAddr(), HEX);
+    Serial.print("CAN node ");
+    Serial.print(activeSettings().nodeId);
+    Serial.print(": current frame 0x");
+    Serial.print(currentFrameCanId(), HEX);
+    Serial.print(", commands 0x");
+    Serial.print(commandCanId(), HEX);
     Serial.print(", telemetry 0x");
-    Serial.println(telemetryCanAddr(), HEX);
+    Serial.println(telemetryCanId(), HEX);
 
     if (errorCode != 0) {
         Serial.print("fdcan1 configuration error: 0x");
@@ -121,11 +124,11 @@ void sendFloat(uint8_t cmd, float dat, uint32_t canID) {
 }
 
 void sendError(uint8_t errorCode) {
-    sendFloat(CMD_ERROR, (float)errorCode, telemetryCanAddr());
+    sendFloat(CMD_ERROR, (float)errorCode, telemetryCanId());
 }
 
 void sendStartResult(bool ok) {
-    sendFloat(CMD_START_FOC, ok ? 1.0f : 0.0f, telemetryCanAddr());
+    sendFloat(CMD_START_FOC, ok ? 1.0f : 0.0f, telemetryCanId());
 }
 
 static void sendStatus() {
@@ -133,7 +136,7 @@ static void sendStatus() {
     const uint16_t mv = supplyMillivolts();
     const uint8_t frame[5] = { CMD_DRIVER_STATUS, driverState(), statusFlags(),
                                (uint8_t)(mv >> 8), (uint8_t)(mv & 0xFF) };
-    sendFrame(frame, sizeof(frame), telemetryCanAddr());
+    sendFrame(frame, sizeof(frame), telemetryCanId());
 }
 
 // Work that has to wait until the reply has gone out (it stops the CPU or
@@ -149,7 +152,7 @@ static void deferAction(DeferredAction a) {
 
 static void replyStatus(uint8_t cmd, uint8_t status) {
     const uint8_t frame[2] = { cmd, status };
-    sendFrame(frame, sizeof(frame), telemetryCanAddr());
+    sendFrame(frame, sizeof(frame), telemetryCanId());
 }
 
 static void replyGetInfo() {
@@ -157,7 +160,7 @@ static void replyGetInfo() {
     const uint8_t frame[8] = { CMD_GET_INFO, CAN_PROTOCOL_VERSION,
                                FIRMWARE_VERSION_MAJOR, FIRMWARE_VERSION_MINOR, FIRMWARE_VERSION_PATCH,
                                (uint8_t)min<uint32_t>(kb, 255), 0, 0 };
-    sendFrame(frame, sizeof(frame), telemetryCanAddr());
+    sendFrame(frame, sizeof(frame), telemetryCanId());
 }
 
 static void replyGetConfig(uint8_t which) {
@@ -167,15 +170,15 @@ static void replyGetConfig(uint8_t which) {
     if (s.calibrationValid)                        flags |= CONFIG_FLAG_CALIBRATION;
     if (s.calibrationValid && s.sensorDirection < 0) flags |= CONFIG_FLAG_SENSOR_DIR_CCW;
     if (settingsUnsaved())                         flags |= CONFIG_FLAG_UNSAVED;
-    uint8_t frame[8] = { CMD_GET_CONFIG, which, static_cast<uint8_t>(s.side), flags };
+    uint8_t frame[8] = { CMD_GET_CONFIG, which, s.nodeId, flags };
     float2bytesMSB(s.calibrationValid ? s.zeroElectricAngle : 0.0f, &frame[4]);
-    sendFrame(frame, sizeof(frame), telemetryCanAddr());
+    sendFrame(frame, sizeof(frame), telemetryCanId());
 }
 
 static void replySetParam(uint8_t param, uint8_t status, float now) {
     uint8_t frame[7] = { CMD_SET_PARAM, param, status };
     float2bytesMSB(now, &frame[3]);
-    sendFrame(frame, sizeof(frame), telemetryCanAddr());
+    sendFrame(frame, sizeof(frame), telemetryCanId());
 }
 
 static void handleSetParam(const CANFDMessage &rxMsg) {
@@ -185,16 +188,16 @@ static void handleSetParam(const CANFDMessage &rxMsg) {
     BoardSettings &p = pendingSettings();
     if (!std::isfinite(v)) { replySetParam(param, CONFIG_ERR_BAD_VALUE, 0); return; }
     switch (param) {
-        case PARAM_SIDE: {
-            const int side = (int)lroundf(v);
-            if (side != (int)MotorSide::Left && side != (int)MotorSide::Right) {
-                replySetParam(param, CONFIG_ERR_BAD_VALUE, (float)static_cast<uint8_t>(p.side));
+        case PARAM_NODE_ID: {
+            const int id = (int)lroundf(v);
+            if (!validNodeId(id)) {
+                replySetParam(param, CONFIG_ERR_BAD_VALUE, (float)p.nodeId);
                 return;
             }
-            p.side = static_cast<MotorSide>(side);
-            Serial.print("CAN: pending side = ");
-            Serial.println(sideName(p.side));
-            replySetParam(param, CONFIG_OK, (float)side);
+            p.nodeId = (uint8_t)id;
+            Serial.print("CAN: pending node ID = ");
+            Serial.println(id);
+            replySetParam(param, CONFIG_OK, (float)id);
             return;
         }
         case PARAM_INVERT:
@@ -241,7 +244,7 @@ static void handleCalibration(const CANFDMessage &rxMsg) {
         status = CONFIG_ERR_UNKNOWN;
     }
     const uint8_t frame[3] = { CMD_CALIBRATION, op, status };
-    sendFrame(frame, sizeof(frame), telemetryCanAddr());
+    sendFrame(frame, sizeof(frame), telemetryCanId());
 }
 
 static void handleCommandMessage(const CANFDMessage &rxMsg) {
@@ -290,7 +293,7 @@ static void handleCommandMessage(const CANFDMessage &rxMsg) {
             if (rxMsg.data[0] != CMD_SHAFT_VELOCITY && rxMsg.data[0] != CMD_DRIVER_STATUS
                 && rxMsg.data[0] != CMD_ERROR) {
                 const uint8_t frame[3] = { CMD_NACK, rxMsg.data[0], CONFIG_ERR_UNKNOWN };
-                sendFrame(frame, sizeof(frame), telemetryCanAddr());
+                sendFrame(frame, sizeof(frame), telemetryCanId());
             }
             break;
         }
@@ -319,12 +322,14 @@ static void handleFrame(const CANFDMessage &rxMsg) {
     // Only standard (non-extended) ID messages are used by this protocol.
     if (rxMsg.ext) return;
 
-    if (rxMsg.id == BOTH_MOTOR_CAN_ADDR) {
+    if (rxMsg.id == currentFrameCanId()) {
         // Exactly two floats expected; anything shorter would leave stale
         // bytes in rxMsg.data.
         if (rxMsg.len != 8) return;
-        setTargetCurrent(bytes2floatMSB(rxMsg.data + broadcastFloatOffset()));
-    } else if (rxMsg.id == thisMotorCanAddr()) {
+        // NaN in our slot = no command for this node (setTargetCurrent ignores
+        // it, so it doesn't count as a command for the timeout either).
+        setTargetCurrent(bytes2floatMSB(rxMsg.data + currentFloatOffset()));
+    } else if (rxMsg.id == commandCanId()) {
         handleCommandMessage(rxMsg);
     }
 }

@@ -33,7 +33,7 @@
 // How often the shaft velocity is broadcast over CAN, in microseconds.
 #define SHAFT_VELOCITY_TELEMETRY_INTERVAL_US 10'000
 
-// If no BOTH_MOTOR_CAN_ADDR current command arrives for this long while FOC
+// If no current command (in this node's current frame) arrives for this long while FOC
 // is running, the target current is forced to 0 A (motor freewheels) until
 // commands resume. Protects against a crashed host or unplugged CAN cable.
 #define COMMAND_TIMEOUT_MS 100

@@ -56,14 +56,14 @@ The board includes an optional **AS5048A** magnetic encoder on a break-away tab.
    ```
    Then type:
    ```text
-   set side left      # or: set side right  (selects the CAN IDs)
+   set node 1         # 1-15, sets the CAN IDs (or: set side left / right = node 1 / 2)
    set invert off     # optional: flip the sign of commands/telemetry for a mirrored motor
    save               # writes to flash and reboots
    ```
 5. **Drive it over CAN** at 1 Mbit/s:
-   - Send `0x10` to the board's command ID (`0x021` left / `0x022` right) to align and start FOC.
+   - Send `0x10` to the board's command ID (`0x020` + node, e.g. `0x021` for node 1) to align and start FOC.
    - Wait for the `[0x10][1.0f]` reply.
-   - Stream target currents in amps as two big-endian floats on ID `0x020` at least every 100 ms.
+   - Stream target currents in amps as two big-endian floats on ID `0x010` (nodes 1 and 2; `0x011` for 3 and 4, and so on) at least every 100 ms.
 
    See [docs/can-protocol.md](docs/can-protocol.md) for the full protocol.
 

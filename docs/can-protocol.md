@@ -5,42 +5,56 @@ The definitions live in [`Firmware/include/can_protocol.h`](../Firmware/include/
 - **Bus:** classic CAN 2.0, standard 11-bit IDs, **1 Mbit/s**, 87.5 % sample point (no FD or bit-rate switching).
 - **Floats:** IEEE-754 single precision, **big-endian** (most significant byte first).
 - **Units:** current in amps, velocity in rad/s (shaft).
-- A board starts CAN only after its side (left or right) has been saved over the [serial console](firmware.md#first-time-setup).
+- Each board has a **node ID** from 1 to 15, so up to 15 boards can share a bus. A board starts CAN only after its node ID has been saved, over the [serial console](firmware.md#first-time-setup) or (once it has one) over CAN.
 
 ## Identifiers
 
-| ID | Direction | Used by | Content |
+For node *n*:
+
+| ID | Direction | Content |
+|---|---|---|
+| `0x010 + (n−1)/2` | Host → boards | Target currents: 8 bytes = two floats, one for an odd node and one for the next even node |
+| `0x020 + n` | Host → board | Command frame `[CMD][payload…]` |
+| `0x100 + n` | Board → host | Telemetry, status and reply frames `[CMD][payload…]` |
+
+(`(n−1)/2` is integer division.)
+
+| Node | Current frame (bytes) | Commands | Telemetry |
 |---|---|---|---|
-| `0x020` | Host → both drivers | Left and right | Target currents: 8 bytes = two floats |
-| `0x021` | Host → driver | Left | Command frame `[CMD][payload…]` |
-| `0x022` | Host → driver | Right | Command frame |
-| `0x101` | Driver → host | Left | Telemetry and status frames `[CMD][payload…]` |
-| `0x100` | Driver → host | Right | Telemetry and status frames |
+| 1 | `0x010` (0–3) | `0x021` | `0x101` |
+| 2 | `0x010` (4–7) | `0x022` | `0x102` |
+| 3 | `0x011` (0–3) | `0x023` | `0x103` |
+| 4 | `0x011` (4–7) | `0x024` | `0x104` |
+| … | … | … | … |
+| 15 | `0x017` (0–3) | `0x02F` | `0x10F` |
 
-The hardware filters on each driver accept only `0x020` and its own command ID.
+The current frames have the lowest IDs, so they win arbitration over every other frame on the bus. The hardware filter on each board accepts only its own current frame and its own command ID.
 
-## Host → driver
+**Upgrading from firmware 1.0/1.1:** those versions used left/right instead of node IDs, with the currents on `0x020` and the right board's telemetry on `0x100`. A board saved as left comes up as node 1 and right as node 2 (the saved byte is the same). Host code needs the new current frame (`0x010`) and right telemetry (`0x102`) IDs.
 
-### Target current, ID `0x020` (8 bytes)
+## Host → board
+
+### Target current, ID `0x010 + (n−1)/2` (8 bytes)
 
 | Bytes | Content |
 |---|---|
-| 0–3 | Left motor target current (float, A) |
-| 4–7 | Right motor target current (float, A) |
+| 0–3 | Target current for the odd node (float, A) |
+| 4–7 | Target current for the even node (float, A) |
 
+- **NaN means "no command" for that node.** Use it to drive one node of a pair without touching the other: the board ignores it, and it doesn't count as a command for the timeout.
 - Frames whose length isn't exactly 8 bytes are ignored, and so are NaN and Inf values.
 - Values are clamped to ±`MOTOR_CURRENT_LIMIT` (2 A by default).
 - If the board's `invert` setting is on, the sign is flipped on the driver.
 - Send this frame **at least every 100 ms** while running. Otherwise the command timeout applies 0 A until frames resume.
 
-### Configuration commands (protocol version 2)
+### Configuration commands (protocol version 2 and later)
 
 These are sent on the board's command ID (`0x021` or `0x022`). The reply comes back on its telemetry ID with the same command byte. Firmware 1.0 (protocol 1) ignores them and doesn't reply, so a host can use `CMD_GET_INFO` to find out which it's talking to.
 
 | CMD | Name | Request | Reply |
 |---|---|---|---|
 | `0x20` | `CMD_GET_INFO` | `[0x20]` | `[0x20][protocol][fw major][fw minor][fw patch][image KB][0][0]` |
-| `0x21` | `CMD_GET_CONFIG` | `[0x21][0 = active, 1 = pending]` | `[0x21][which][side][config flags][zero electric angle, float]` |
+| `0x21` | `CMD_GET_CONFIG` | `[0x21][0 = active, 1 = pending]` | `[0x21][which][node ID, 0 = not set][config flags][zero electric angle, float]` |
 | `0x22` | `CMD_SET_PARAM` | `[0x22][param][float value]` | `[0x22][param][status][float value now]` |
 | `0x23` | `CMD_CALIBRATION` | `[0x23][1 = store, 2 = clear]` | `[0x23][op][status]` |
 | `0x24` | `CMD_SAVE` | `[0x24]` | `[0x24][status]`, then (if OK) the board stops the motor, writes flash and reboots |
@@ -52,7 +66,7 @@ These are sent on the board's command ID (`0x021` or `0x022`). The reply comes b
 
 | ID | Name | Values | Kind |
 |---|---|---|---|
-| 1 | `PARAM_SIDE` | 1 = left, 2 = right | Saved. **The board's CAN IDs change after the reboot** |
+| 1 | `PARAM_NODE_ID` | 1–15 | Saved. **The board's CAN IDs change after the reboot.** Don't give two boards the same ID: they can then no longer be told apart (fix it over USB with `set node`) |
 | 2 | `PARAM_INVERT` | 0 / 1 | Saved |
 | `0x10` | `PARAM_VELOCITY_INTERVAL_MS` | 1–100 (default 10) | Runtime: applies at once and goes back to the default after a reset |
 
@@ -125,9 +139,9 @@ The voltage is measured through the V_SENS divider. Before FOC starts it is read
 ## Typical sequence
 
 1. Wait for a `CMD_DRIVER_STATUS` frame with state `IDLE` from each board.
-2. Send `[0x10]` to `0x021` and `0x022`.
+2. Send `[0x10]` to each board's command ID (`0x021`, `0x022`, …).
 3. Wait for the `[0x10][1.0]` reply from each board.
-4. Stream `0x020` frames with target currents (for example at 100–1000 Hz). Read `CMD_SHAFT_VELOCITY` for feedback.
+4. Stream the current frames (`0x010` for nodes 1 and 2) with target currents (for example at 100–1000 Hz). Read `CMD_SHAFT_VELOCITY` for feedback.
 5. To stop, send 0 A or stop sending. After 100 ms each driver applies 0 A on its own.
 
 ## Example host (Python, `python-can`)
@@ -140,8 +154,9 @@ import time
 
 import can
 
-LEFT_CMD, RIGHT_CMD, BOTH = 0x021, 0x022, 0x020
-LEFT_TLM, RIGHT_TLM = 0x101, 0x100
+# Nodes 1 and 2: commands 0x020 + n, telemetry 0x100 + n, currents in frame 0x010.
+LEFT_CMD, RIGHT_CMD, CURRENTS = 0x021, 0x022, 0x010
+LEFT_TLM, RIGHT_TLM = 0x101, 0x102
 CMD_SHAFT_VELOCITY, CMD_DRIVER_STATUS, CMD_START_FOC, CMD_ERROR = 0x02, 0x03, 0x10, 0xFF
 
 bus = can.Bus(interface="socketcan", channel="can0")
@@ -163,7 +178,7 @@ while len(started) < 2 and time.time() < deadline:
 
 # Command 0.3 A on both motors at 200 Hz and print the velocities.
 while True:
-    send(BOTH, struct.pack(">ff", 0.3, 0.3))
+    send(CURRENTS, struct.pack(">ff", 0.3, 0.3))  # use float("nan") to leave a node alone
     msg = bus.recv(timeout=0.005)
     if msg and msg.data[0] == CMD_SHAFT_VELOCITY:
         side = "L" if msg.arbitration_id == LEFT_TLM else "R"

@@ -307,7 +307,7 @@ void motorControlLoop() {
     // second sample per loop and distort it.
     const uint32_t currentTime = _micros();
     if (currentTime - lastVelocitySendTime >= velocity_interval_us) {
-        sendFloat(CMD_SHAFT_VELOCITY, direction_sign * motor.shaft_velocity, telemetryCanAddr());
+        sendFloat(CMD_SHAFT_VELOCITY, direction_sign * motor.shaft_velocity, telemetryCanId());
         lastVelocitySendTime = currentTime;
     }
 

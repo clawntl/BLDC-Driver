@@ -82,7 +82,7 @@ After you press Enter, the firmware prints the command list, the supply voltage 
 > [!NOTE]
 > The firmware accepts CR, LF or CRLF line endings. Type commands in lower case, with any argument after a space, e.g. `v 1.5`.
 
-The saved `driver` settings (side, invert, stored alignment) are kept while `motor_test` is flashed. Flashing over DFU doesn't touch the settings page.
+The saved `driver` settings (node ID, invert, stored alignment) are kept while `motor_test` is flashed. Flashing over DFU doesn't touch the settings page.
 
 ---
 
@@ -436,6 +436,6 @@ Board ID: ______________   Motor: ______________   Date: __________   Tester: __
 10 rev / rev -1       one turn each way, est_pp ____                                     [ ] OK
 11 foc x3             dir ____  ____  ____   zero angle ______  ______  ______  CS ____  [ ] OK
 12 t 1 / t -1         speed ______ / ______ rad/s   smooth Y/N                           [ ] OK
-   driver flashed     configured: side ______  invert ______                             [ ] Done
+   driver flashed     configured: node ______  invert ______                             [ ] Done
 Notes:
 ```
