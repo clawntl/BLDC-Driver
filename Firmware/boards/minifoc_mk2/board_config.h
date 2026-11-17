@@ -1,8 +1,9 @@
 #pragma once
 
-// MiniFOC Mk2 Rev 01 (github.com/clawntl/MiniFOC): STM32G431CBT6 (LQFP-48) +
-// DRV8316 + AS5047P, inline phase current sense (INA241A3), INA226 supply
-// monitor, separate 5 V buck. Pins from the KiCad netlist.
+// MiniFOC Mk2 Rev 01: STM32G431CBT6 (LQFP-48) + DRV8316 + AS5047P, inline
+// phase current sense (INA241A3), INA226 supply monitor, separate 5 V buck.
+// Pins from the KiCad netlist.
+// Hardware: Hardware/minifoc_mk2. Docs: docs/boards/minifoc_mk2.md.
 //
 // Found as "board_config.h" through -I boards/minifoc_mk2 (see board.ini here).
 // See docs/firmware.md#boards for what a board header has to define.

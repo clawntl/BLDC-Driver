@@ -152,7 +152,7 @@ Firmware/boards/
 
 `platformio.ini` pulls in every `boards/*/board.ini`, and each board's environments add `-I boards/<name>`, so the code finds that board's header as `"board_config.h"`. Nothing outside the folder lists the boards: the CI workflow also builds whatever folders it finds.
 
-| | BLDC-Driver v0.2 | MiniFOC Mk2 |
+| | [BLDC-Driver v0.2](boards/bldc_driver_v02.md) | [MiniFOC Mk2](boards/minifoc_mk2.md) |
 |---|---|---|
 | Folder | `bldc_driver_v02` | `minifoc_mk2` |
 | Board ID / hardware rev | 1 / 2 | 2 / 2 |
@@ -213,6 +213,7 @@ Its `board.ini` is a copy of the base board's, with the folder name changed. A v
 3. Edit `board.ini`: rename both environments and the `-I boards/...` path, and set `USB_PRODUCT`.
 4. If the board has a part the firmware doesn't know yet, add a file in `src/parts/` that implements the interface in `src/hw/`, guarded by a new macro (copy a similar part). If the part gives the host something new, such as an IMU, give it a capability bit in `can_protocol.h` and add it to `boardCapabilities()` in `hw/board_info.cpp`.
 5. Build the new environments, then bring the board up with its `_test` environment and the [test routines](test-routines.md).
+6. Outside the firmware, use the same folder name for the board's KiCad project (`Hardware/<name>/`), its pictures (`Images/<name>/`) and its page (`docs/boards/<name>.md`, copy an existing one). Add it to the boards table in the README.
 
 The host tools need no changes: they show the model name and use the capability bits that the board reports.
 

@@ -6,5 +6,5 @@
 //
 // Add a new number for each new board design; never reuse or renumber one.
 #define BOARD_ID_UNKNOWN      0 // firmware before 1.3.0 (sends 0 here)
-#define BOARD_ID_BLDC_DRIVER  1 // BLDC-Driver (this repository's Hardware/)
-#define BOARD_ID_MINIFOC      2 // MiniFOC (github.com/clawntl/MiniFOC)
+#define BOARD_ID_BLDC_DRIVER  1 // BLDC-Driver (Hardware/bldc_driver_v02)
+#define BOARD_ID_MINIFOC      2 // MiniFOC (Hardware/minifoc_mk2)

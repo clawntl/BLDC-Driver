@@ -3,7 +3,7 @@
 These files are ElmüSoft's Python sample application for the CANable 2.5 firmware. They're bundled here so that `minifoc_cantest.py` and `minifoc_cantest_gui.py` work without any extra setup.
 
 - **Source:** [Elmue/CANable-2.5-firmware-Slcan-and-Candlelight](https://github.com/Elmue/CANable-2.5-firmware-Slcan-and-Candlelight), folder `SampleApplication Python/Source`, commit `12aa9fa` (2026-10-03).
-- **License:** BSD 3-Clause, Copyright ElmüSoft. See [License.txt](License.txt). This license applies to the files in this folder only. The rest of the MiniFOC repository is AGPL-3.0.
+- **License:** BSD 3-Clause, Copyright ElmüSoft. See [License.txt](License.txt). This license applies to the files in this folder only. The rest of the BLDC-Driver repository is AGPL-3.0.
 - **Changes:** none. The files are as published. Only their line endings may differ.
 
 ## Known issues

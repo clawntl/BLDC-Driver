@@ -1,7 +1,8 @@
 #pragma once
 
-// BLDC-Driver v0.2 (this repository's Hardware/): STM32G431CBU6 + DRV8316 +
-// AS5048A, DRV8316 low-side current sense, VIN through a resistor divider.
+// BLDC-Driver v0.2: STM32G431CBU6 + DRV8316 + AS5048A, DRV8316 low-side
+// current sense, VIN through a resistor divider.
+// Hardware: Hardware/bldc_driver_v02. Docs: docs/boards/bldc_driver_v02.md.
 //
 // Found as "board_config.h" through -I boards/bldc_driver_v02 (see board.ini here).
 // See docs/firmware.md#boards for what a board header has to define.
