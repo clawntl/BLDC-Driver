@@ -6,7 +6,7 @@
 #include "stm32g4xx_hal.h" // needed for HAL_DeInit / rebootToDFU
 #include <IWatchdog.h>
 
-#include "board.h"
+#include "board_config.h"
 
 // Magic left in a TAMP backup register to ask the next boot to go straight to
 // the bootloader. Backup registers keep their contents across a system reset.

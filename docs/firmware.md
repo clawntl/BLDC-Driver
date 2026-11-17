@@ -15,6 +15,8 @@ One firmware image serves every board of a type. Per-board settings are stored i
 | `minifoc_mk2` | MiniFOC Mk2 | The real firmware |
 | `minifoc_mk2_test` | MiniFOC Mk2 | Bench and bring-up firmware |
 
+Every board has a `<name>` and a `<name>_test` environment, defined in `boards/<name>/board.ini`.
+
 In the rest of this guide, "`driver`" means a board's firmware environment and "`motor_test`" its `_test` environment.
 
 ```bash
@@ -91,9 +93,9 @@ The console runs at 115200 baud. Lines end in LF or CR, and commands are case-in
 
 ## Runtime behaviour
 
-1. **Boot.** The firmware waits up to 2 s for a serial terminal, loads settings, starts CAN (if the board is configured), measures VIN and configures the DRV8316. The motor is **not** energised yet. If the DRV8316 doesn't answer over SPI (no motor supply yet, or firmware built for another board), a warning is printed.
+1. **Boot.** The firmware waits up to 2 s for a serial terminal, loads settings, starts CAN (if the board is configured), measures VIN and configures the DRV8316. The motor is **not** energised yet.
 2. **Idle.** The board waits for `CMD_START_FOC` over CAN (or `start` on the console) and sends a status heartbeat every 100 ms, which includes the live supply voltage.
-3. **Start.** The board checks the DRV8316 answers over SPI (writing its registers again if it didn't at boot), then runs `motor.init()`, current-sense initialisation and `initFOC()`, which block for about 1–3 s. CAN frames received during the start are discarded. The result is reported as a `CMD_START_FOC` reply, and a `CMD_ERROR` frame is sent on failure. A failed start can be retried.
+3. **Start.** The board runs `motor.init()`, current-sense initialisation and `initFOC()`, which block for about 1–3 s. CAN frames received during the start are discarded. The result is reported as a `CMD_START_FOC` reply, and a `CMD_ERROR` frame is sent on failure. A failed start can be retried.
 4. **Running.** The board runs FOC current (torque) control. Target current comes from the board's current frame and is clamped to ±`MOTOR_CURRENT_LIMIT`. Shaft velocity is sent every 10 ms.
 
 ### Safety features
@@ -105,7 +107,6 @@ The console runs at 115200 baud. Lines end in LF or CR, and commands are case-in
 | DRV8316 fault polling | Status is read every 500 ms. A new fault is printed, reported over CAN (`ERR_DRIVER_FAULT`) and cleared |
 | CAN bus-off recovery | The firmware detects bus-off and rejoins the bus automatically |
 | Input validation | NaN or Inf current commands are ignored (NaN = "no command for this node"), and short current frames are rejected |
-| Wrong-board check | Start FOC refuses to run (`ERR_DRIVER_SPI`) unless the DRV8316 reads back the registers written to it, so firmware built for another board can't drive the bridge with the wrong current sense |
 
 ### Status LED
 
@@ -133,42 +134,87 @@ The console runs at 115200 baud. Lines end in LF or CR, and commands are case-in
 | `WATCHDOG_TIMEOUT_US` | 250 000 | Watchdog timeout |
 | `BOOT_SERIAL_WAIT_MS` | 2 000 | How long to wait for a serial terminal at boot |
 
-The CAN IDs and bit rate are in [`Firmware/include/can_protocol.h`](../Firmware/include/can_protocol.h). Hardware constants (pins, current-sense gain, `VSENS_CALIBRATION` and so on) are in the board headers, see below.
+The CAN IDs and bit rate are in [`Firmware/include/can_protocol.h`](../Firmware/include/can_protocol.h). Hardware constants (pins, current-sense gain, `VSENS_CALIBRATION` and so on) are in the board headers, see [Boards](#boards).
 
 ## Boards
 
-Everything that differs between boards lives in one header per board in [`Firmware/include/boards/`](../Firmware/include/boards). The environment's `-D BOARD_...` flag picks it through `include/board.h`.
+Each board is a folder in [`Firmware/boards/`](../Firmware/boards):
+
+```
+Firmware/boards/
+  bldc_driver_v02/
+    board_config.h      pins, parts and hardware constants
+    board.ini    build environments bldc_driver_v02 and bldc_driver_v02_test
+  minifoc_mk2/
+    board_config.h
+    board.ini
+```
+
+`platformio.ini` pulls in every `boards/*/board.ini`, and each board's environments add `-I boards/<name>`, so the code finds that board's header as `"board_config.h"`. Nothing outside the folder lists the boards: the CI workflow also builds whatever folders it finds.
 
 | | BLDC-Driver v0.2 | MiniFOC Mk2 |
 |---|---|---|
-| Header | `bldc_driver_v02.h` | `minifoc_mk2.h` |
-| Board ID / hardware rev (`CMD_GET_INFO`) | 1 / 2 | 2 / 2 |
+| Folder | `bldc_driver_v02` | `minifoc_mk2` |
+| Board ID / hardware rev | 1 / 2 | 2 / 2 |
 | Encoder | AS5048A, 5 MHz SPI | AS5047P, 8 MHz SPI |
 | Phase current sense | DRV8316 low-side CSAs, 600 mV/A | Inline 3 mΩ shunts + INA241A3 (50 V/V) |
 | Supply sensing | V_SENS divider on ADC1 | INA226 on I2C1 (voltage and input current) |
 | 5 V supply | DRV8316 buck | Separate AP63205 (DRV8316 buck off) |
 | DFU button | USER (PB12) | None (BOOT is CAN RX) |
+| Capabilities (`CMD_GET_BOARD_INFO`) | `CAP_SUPPLY_VOLTAGE` | `CAP_SUPPLY_VOLTAGE`, `CAP_INPUT_CURRENT` |
 
-A board header defines:
+### Parts
 
-- `BOARD_ID`, `BOARD_HW_REV`, `BOARD_MODEL`: reported by `CMD_GET_INFO` and the `config` command. IDs are listed in `include/board_ids.h`.
-- The pin map: `LED_BUILTIN`, SPI1, `DRV_CS`, `ENC_CS`, `CAN_EN`, the six PWM pins and `SO_A/B/C`.
-- Exactly one of each part type, plus that part's constants:
-  - `ENCODER_AS5048A` or `ENCODER_AS5047P`, with `ENCODER_SPI_HZ`;
-  - `CURRENT_SENSE_DRV8316_LOWSIDE` (with `CURRENT_SENSE_MV_PER_A`, `DRV8316_CSA_GAIN`) or `CURRENT_SENSE_INLINE` (with `CURRENT_SENSE_SHUNT_OHMS`, `CURRENT_SENSE_GAIN`);
-  - `SUPPLY_SENSE_ADC_DIVIDER` (`V_SENS`, `VSENS_*`) or `SUPPLY_SENSE_INA226` (`I2C1_*`, `INA226_*`);
-  - `DRV8316_BUCK_ENABLED` 0/1 (and `DRV8316_BUCK_VOLTAGE`);
-  - `HAS_DFU_BUTTON` with `DFU_BUTTON`, if there is one.
+Each kind of part has an interface in [`src/hw/`](../Firmware/src/hw) and one file per part in [`src/parts/`](../Firmware/src/parts):
 
-`board.h` stops the build with an error if one is missing. The code in [`Firmware/src/hw/`](../Firmware/src/hw) turns these into the SimpleFOC objects, the DRV8316 setup and the supply sensing, so the rest of the firmware never checks which board it is.
+| Interface | Parts | Selected by |
+|---|---|---|
+| `hw/encoder.h` | `encoder_as5048a.cpp`, `encoder_as5047p.cpp` | `ENCODER_AS5048A`, `ENCODER_AS5047P` |
+| `hw/current_sense.h` | `current_drv8316_lowside.cpp`, `current_inline.cpp` | `CURRENT_SENSE_DRV8316_LOWSIDE`, `CURRENT_SENSE_INLINE` |
+| `hw/supply.h` | `supply_vsens.cpp`, `supply_ina226.cpp` | `SUPPLY_SENSE_ADC_DIVIDER`, `SUPPLY_SENSE_INA226` |
+
+Every part file is compiled for every board, but its contents are inside `#if defined(<its macro>)`, so only the parts the board header selects end up in the build. Choosing no part of a kind gives an "undefined reference" link error, and choosing two gives a "multiple definition" error.
+
+The rest of the firmware only uses the interfaces, so it never checks which board or part it has. The DRV8316 setup (`hw/drv8316_setup.cpp`) is shared too: it turns the DRV8316 buck on if the board defines `DRV8316_BUCK_VOLTAGE` and off otherwise, and asks the current-sense part for any settings it needs (the CSA gain for the DRV8316's own amplifiers).
+
+### What a board header defines
+
+- `BOARD_ID` (from `include/board_ids.h`), `BOARD_HW_REV` and `BOARD_MODEL` (up to 30 characters). The host reads these with `CMD_GET_BOARD_INFO`.
+- The pin map: `LED_BUILTIN`, SPI1, `DRV_CS`, `ENC_CS`, `CAN_EN`, `CAN_RX_BOOT0`, the six PWM pins and `SO_A/B/C`.
+- One part of each kind, plus that part's constants:
+  - an encoder with `ENCODER_SPI_HZ`;
+  - a current sense, either `CURRENT_SENSE_MV_PER_A` and `DRV8316_CSA_GAIN`, or `CURRENT_SENSE_SHUNT_OHMS` and `CURRENT_SENSE_GAIN`, plus `CURRENT_SENSE_OFFSET_HINT` for `motor_test`;
+  - a supply sensor with its pins and constants (`V_SENS`, `VSENS_*`, or `I2C1_*`, `INA226_*`).
+- Optional: `DRV8316_BUCK_VOLTAGE`, and `HAS_DFU_BUTTON` with `DFU_BUTTON`.
+
+Build flags that the STM32 core reads, rather than our code, go in `board.ini`: `USB_PRODUCT`, and on BLDC-Driver `ADC_SAMPLINGTIME`.
+
+### Variants
+
+A variant that differs in a few values, such as other shunts, another encoder or one moved pin, is a new folder whose `board_config.h` includes the base board and overrides what changes:
+
+```cpp
+// boards/minifoc_mk2_2mohm/board_config.h
+#pragma once
+#include "../minifoc_mk2/board_config.h"
+
+#undef  BOARD_MODEL
+#define BOARD_MODEL "MiniFOC Mk2 2mOhm"
+#undef  CURRENT_SENSE_SHUNT_OHMS
+#define CURRENT_SENSE_SHUNT_OHMS 0.002f
+```
+
+Its `board.ini` is a copy of the base board's, with the folder name changed. A variant keeps the board ID of its base; a host tells them apart by `BOARD_MODEL` and the capability bits.
 
 ### Adding a board
 
-1. Copy the closest header in `include/boards/`, rename it and update the pins and parts. Give it a new number in `include/board_ids.h` (never reuse one) and set `BOARD_HW_REV`.
-2. Add it to the `#if` list in `include/board.h`.
-3. In `platformio.ini`, copy a board's `[name]` section and its two `[env:...]` sections, and change the `-D BOARD_...` flag and `USB_PRODUCT`.
-4. If the board has a part the firmware doesn't know yet (a different encoder, current-sense amplifier or supply monitor), add a new capability macro and handle it in `src/hw/`: `board_hw.h` for encoders and current sense, or a new `supply_*.cpp` that implements `hw/supply.h`.
-5. Build every environment (`pio run`), then bring the board up with its `_test` environment and the [test routines](test-routines.md).
+1. Copy the folder of the closest board in `boards/`, or make it a variant as above.
+2. Edit `board_config.h`: pins, parts and constants. For a new board design (not a variant), add a number to `include/board_ids.h` (never reuse one) and set `BOARD_HW_REV` and `BOARD_MODEL`.
+3. Edit `board.ini`: rename both environments and the `-I boards/...` path, and set `USB_PRODUCT`.
+4. If the board has a part the firmware doesn't know yet, add a file in `src/parts/` that implements the interface in `src/hw/`, guarded by a new macro (copy a similar part). If the part gives the host something new, such as an IMU, give it a capability bit in `can_protocol.h` and add it to `boardCapabilities()` in `hw/board_info.cpp`.
+5. Build the new environments, then bring the board up with its `_test` environment and the [test routines](test-routines.md).
+
+The host tools need no changes: they show the model name and use the capability bits that the board reports.
 
 ## Source layout
 
@@ -179,15 +225,13 @@ A board header defines:
 | `src/can_bus.*` | FDCAN setup and filters, frame encoding and decoding, heartbeat, bus-off recovery |
 | `src/board_settings.*` | Per-board settings in flash (EEPROM emulation, CRC-32 and version checked) |
 | `src/serial_console.*` | Non-blocking USB serial command console |
-| `src/hw/board_hw.h` | Encoder and current-sense types for the board, encoder diagnostics adapter |
-| `src/hw/drv8316_setup.cpp` | DRV8316 register setup and the read-back check (shared with `motor_test`) |
-| `src/hw/supply.h` | Supply sensing interface: boot measurement, live VIN for the heartbeat, input current |
-| `src/hw/supply_adc_divider.cpp` | V_SENS divider: `analogRead()` before the current sense starts, regular ADC1 conversions afterwards |
-| `src/hw/supply_ina226.cpp` | INA226 power monitor over I2C |
+| `src/hw/` | Part interfaces (`encoder.h`, `current_sense.h`, `supply.h`), the shared DRV8316 setup, `board_info` (capabilities, model) and the supply code every sensor shares |
+| `src/parts/` | One file per part, compiled in when the board header selects it |
 | `src/dfu.*` | Reboot into the ROM DFU bootloader (also with the watchdog running), DFU button |
 | `src/clock_config.cpp` | 160 MHz clock tree from the 16 MHz HSE |
 | `src/motor_test/` | Bench-test firmware (`_test` environments only) |
-| `include/board.h`, `include/boards/` | Board selection, pin maps and fitted parts |
+| `boards/<name>/` | Each board's `board_config.h` (pins, parts) and `board.ini` (build environments) |
+| `include/board_ids.h` | Board ID registry |
 | `lib/ACANFD_STM32_G431/` | FDCAN driver, a fork of ACANFD-STM32 trimmed to this board |
 
 ### Flash size limit
@@ -196,7 +240,7 @@ Settings live in the **last 2 KB flash page** (0x0801F800), so the firmware imag
 
 ## Bench-test firmware (`motor_test`)
 
-`motor_test` brings up a new board or motor one subsystem at a time. It shares the board header, `motor_config.h`, `src/hw/` (DRV8316 setup, encoder, current sense, VIN measurement), the clock configuration and DFU with the real firmware.
+`motor_test` brings up a new board or motor one subsystem at a time. It shares the board header, `motor_config.h`, `src/hw/` and `src/parts/` (DRV8316 setup, encoder, current sense, VIN measurement), the clock configuration and DFU with the real firmware.
 
 ```bash
 pio run -e bldc_driver_v02_test -t upload       # or minifoc_mk2_test

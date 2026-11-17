@@ -3,11 +3,15 @@
 // MiniFOC Mk2 Rev 01 (github.com/clawntl/MiniFOC): STM32G431CBT6 (LQFP-48) +
 // DRV8316 + AS5047P, inline phase current sense (INA241A3), INA226 supply
 // monitor, separate 5 V buck. Pins from the KiCad netlist.
-// Only include this through board.h.
+//
+// Found as "board_config.h" through -I boards/minifoc_mk2 (see board.ini here).
+// See docs/firmware.md#boards for what a board header has to define.
+
+#include "board_ids.h"
 
 #define BOARD_ID      BOARD_ID_MINIFOC
 #define BOARD_HW_REV  2 // Mk2
-#define BOARD_MODEL   "MiniFOC Mk2"
+#define BOARD_MODEL   "MiniFOC Mk2"   // reported over CAN, max 30 characters
 
 // ---- Pins -------------------------------------------------------------------
 
@@ -59,30 +63,27 @@
 #define SO_B        PA1
 #define SO_C        PA0
 
-// ---- Fitted parts -----------------------------------------------------------
+// ---- Parts (each selects one file in src/parts/) ----------------------------
 
 // No DFU button that firmware can read (it is BOOT0, see above).
 
-// Encoder on SPI1.
+// Encoder on SPI1: src/parts/encoder_as5047p.cpp
 #define ENCODER_AS5047P 1
 #define ENCODER_SPI_HZ  8'000'000
 
 // Phase current: 3 mOhm shunts (R4 / R8 / R17 on phases A / B / C) into
 // INA241A3 amplifiers (50 V/V), output centred on 3V3/2 -> 0.15 V/A, +-11 A.
-// The DRV8316's own CSA outputs are not connected.
-#define CURRENT_SENSE_INLINE     1
-#define CURRENT_SENSE_SHUNT_OHMS 0.003f
-#define CURRENT_SENSE_GAIN       50.0f
+// The DRV8316's own CSA outputs are not connected. src/parts/current_inline.cpp
+#define CURRENT_SENSE_INLINE      1
+#define CURRENT_SENSE_SHUNT_OHMS  0.003f
+#define CURRENT_SENSE_GAIN        50.0f
 #define CURRENT_SENSE_OFFSET_HINT "~1.65 V (INA241 REF = 3V3/2)"
 
-// 5 V comes from a separate AP63205 buck; the DRV8316's buck is unpopulated
-// (R_BK/C_BK only), so it is switched off.
-#define DRV8316_BUCK_ENABLED 0
+// No DRV8316_BUCK_VOLTAGE: 5 V comes from a separate AP63205 buck and the
+// DRV8316's buck is unpopulated (R_BK/C_BK only), so it is switched off.
 
-// Supply voltage and input current: INA226 on I2C1 (see hw/supply_ina226.cpp),
-// shunt R1 between V_IN and V_M. No ADC_SAMPLINGTIME override: SimpleFOC's
-// InlineCurrentSense reads the phases with analogRead() on STM32, so a long
-// sample time would slow the FOC loop.
+// Supply voltage and input current: INA226 on I2C1, src/parts/supply_ina226.cpp.
+// Shunt R1 between V_IN and V_M.
 #define SUPPLY_SENSE_INA226 1
 #define INA226_I2C_ADDR     0x40
 #define INA226_SHUNT_OHMS   0.003f

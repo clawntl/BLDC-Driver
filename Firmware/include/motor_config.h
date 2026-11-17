@@ -5,7 +5,7 @@
 #define MOTOR_POLE_PAIRS 11
 
 // Motor and control settings. Board hardware (pins, sensors, current sense,
-// supply sensing) is in include/boards/, selected through board.h.
+// supply sensing) is in boards/<name>/board_config.h, see docs/firmware.md#boards.
 
 // Supply voltage feeding the DRV8316, in Volts. Used only as a FALLBACK: the
 // actual value is measured at startup by the board's supply sensor (see

@@ -6,18 +6,22 @@
 // Unlike an ADC divider this goes over I2C, so it can be read at any time,
 // including while FOC is running (each read blocks for roughly 100 us).
 
-#include "supply.h"
+#include "board_config.h"
 
 #if defined(SUPPLY_SENSE_INA226)
+
+#include "hw/supply.h"
+#include "can_protocol.h"
 
 #include <Arduino.h>
 #include <Wire.h>
 
 namespace {
 
-// How often the live voltage for the heartbeat is read. Each read is an I2C
-// transfer that blocks for ~100 us, so keep this well above the FOC loop
-// period. No software filter: the INA226 already averages (CONFIG_VALUE).
+// How often the live voltage and current for the heartbeat are read. Each
+// read is an I2C transfer that blocks for ~100 us, so keep this well above
+// the FOC loop period. No software filter: the INA226 already averages
+// (CONFIG_VALUE).
 constexpr uint32_t SAMPLE_INTERVAL_MS = 100;
 
 constexpr uint8_t REG_CONFIG   = 0x00;
@@ -36,6 +40,8 @@ constexpr float BUS_LSB_V   = 1.25e-3f;
 bool present = false;
 
 float liveVolts = 0;
+float liveAmps = 0;
+bool haveAmps = false;
 uint32_t lastSampleMs = 0;
 uint8_t failedReads = 0;
 
@@ -61,6 +67,8 @@ bool readReg(uint8_t reg, uint16_t &value) {
 } // namespace
 
 const char *supplySensorName() { return "INA226"; }
+
+uint32_t supplyCapabilities() { return CAP_SUPPLY_VOLTAGE | CAP_INPUT_CURRENT; }
 
 void supplyBegin() {
     Wire.setSDA(I2C1_SDA);
@@ -102,15 +110,24 @@ void updateSupplyMonitor() {
     const uint32_t now = millis();
     if (lastSampleMs != 0 && now - lastSampleMs < SAMPLE_INTERVAL_MS) return;
     lastSampleMs = now ? now : 1;
-    float v;
-    if (readSupplyVoltage(v)) {
+    float v, a;
+    if (readSupplyVoltage(v) && readSupplyCurrent(a)) {
         liveVolts = v;
+        liveAmps = a;
+        haveAmps = true;
         failedReads = 0;
     } else if (++failedReads >= 3) {
-        liveVolts = 0;  // stop reporting a stale value
+        liveVolts = 0;  // stop reporting stale values
+        haveAmps = false;
     }
 }
 
 float supplyVoltageNow() { return liveVolts; }
+
+bool supplyCurrentNow(float &amps) {
+    if (!haveAmps) return false;
+    amps = liveAmps;
+    return true;
+}
 
 #endif // SUPPLY_SENSE_INA226

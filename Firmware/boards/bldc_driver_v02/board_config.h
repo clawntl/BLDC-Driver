@@ -2,11 +2,15 @@
 
 // BLDC-Driver v0.2 (this repository's Hardware/): STM32G431CBU6 + DRV8316 +
 // AS5048A, DRV8316 low-side current sense, VIN through a resistor divider.
-// Only include this through board.h.
+//
+// Found as "board_config.h" through -I boards/bldc_driver_v02 (see board.ini here).
+// See docs/firmware.md#boards for what a board header has to define.
+
+#include "board_ids.h"
 
 #define BOARD_ID      BOARD_ID_BLDC_DRIVER
 #define BOARD_HW_REV  2 // v0.2
-#define BOARD_MODEL   "BLDC-Driver v0.2"
+#define BOARD_MODEL   "BLDC-Driver v0.2"   // reported over CAN, max 30 characters
 
 // ---- Pins -------------------------------------------------------------------
 
@@ -41,17 +45,18 @@
 
 #define V_SENS  PA3 // VIN / 11 via R17 100k / R16 10k divider
 
-// ---- Fitted parts -----------------------------------------------------------
+// ---- Parts (each selects one file in src/parts/) ----------------------------
 
 // USER button to GND: pressing it while the firmware runs enters USB DFU.
 #define HAS_DFU_BUTTON 1
 #define DFU_BUTTON     PB12
 
-// Encoder on SPI1.
+// Encoder on SPI1: src/parts/encoder_as5048a.cpp
 #define ENCODER_AS5048A 1
 #define ENCODER_SPI_HZ  5'000'000
 
-// Phase current: the DRV8316's own low-side current-sense amplifiers.
+// Phase current: the DRV8316's own low-side current-sense amplifiers,
+// src/parts/current_drv8316_lowside.cpp.
 // 600 mV/A matches the DRV8316 CSA gain register code below (Gain_0V25). The
 // DRV8316 datasheet's gain table had an erratum: the real gains for codes
 // 0..3 are 0.15 / 0.3 / 0.6 / 1.2 V/A, so the SimpleFOCDrivers enum name
@@ -61,12 +66,12 @@
 #define CURRENT_SENSE_MV_PER_A        600.0f
 #define CURRENT_SENSE_OFFSET_HINT     "~half the CSA reference (DRV8316 VREF/2)"
 
-// The DRV8316's buck converter makes the board's 5 V.
-#define DRV8316_BUCK_ENABLED 1
+// The DRV8316's buck converter makes the board's 5 V. (Leave this undefined
+// on boards with their own 5 V supply: the buck is then switched off.)
 #define DRV8316_BUCK_VOLTAGE VB_5V
 
-// Supply voltage: V_SENS divider on ADC1 (see hw/supply_adc_divider.cpp).
-// Also needs -D ADC_SAMPLINGTIME=ADC_SAMPLETIME_247CYCLES_5 (platformio.ini).
+// Supply voltage: V_SENS divider on ADC1, src/parts/supply_vsens.cpp.
+// Also needs -D ADC_SAMPLINGTIME=ADC_SAMPLETIME_247CYCLES_5 (board.ini).
 #define SUPPLY_SENSE_ADC_DIVIDER 1
 // V_SENS divider: VIN -> 100k -> PA3 -> 10k -> GND, ratio (100k+10k)/10k.
 #define VSENS_DIVIDER_RATIO 11.0f

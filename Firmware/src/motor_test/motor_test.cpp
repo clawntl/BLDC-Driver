@@ -5,8 +5,8 @@
 //  Built ONLY by the `<board>_test` PlatformIO environments (see
 //  platformio.ini). The normal board builds exclude this folder, and this
 //  build excludes main.cpp / motor_control.cpp / can_bus.cpp. It shares the
-//  board header (board.h), motor_config.h, the hardware layer (src/hw/),
-//  clock_config.cpp and dfu.cpp with the real firmware so the hardware setup
+//  board header (board_config.h), motor_config.h, the hardware layer (src/hw/ and
+//  src/parts/), clock_config.cpp and dfu.cpp with the real firmware so the hardware setup
 //  can't drift from what the robot actually runs.
 //
 //  No CAN: everything is driven from the USB serial console (115200, send a
@@ -33,10 +33,13 @@
 
 #include "utilities/stm32math/STM32G4CORDICTrigFunctions.h"
 
-#include "board.h"
+#include "board_config.h"
 #include "motor_config.h"
 #include "dfu.h"
-#include "hw/board_hw.h"
+#include "drivers/drv8316/drv8316.h"
+#include "hw/encoder.h"
+#include "hw/current_sense.h"
+#include "hw/drv8316_setup.h"
 #include "hw/supply.h"
 
 // ---------------------------------------------------------------------------
@@ -56,8 +59,8 @@ static SPIClass SPI_1(SPI1_MOSI, SPI1_MISO, SPI1_SCK);
 
 static BLDCMotor motor(MOTOR_POLE_PAIRS);
 static DRV8316Driver6PWM driver(PHA_H, PHA_L, PHB_H, PHB_L, PHC_H, PHC_L, DRV_CS, false);
-static BoardCurrentSense current_sense(BOARD_CURRENT_SENSE_ARGS);
-static BoardEncoder sensor(BOARD_ENCODER_ARGS);
+static CurrentSense &current_sense = boardCurrentSense();
+static Sensor &sensor = boardEncoder();
 
 // ---------------------------------------------------------------------------
 //  State
@@ -107,15 +110,15 @@ static float wrapPi(float a) {
 static void sensorSnapshot() {
     // The AS5048A / AS5047P answer each SPI frame with the result of the
     // PREVIOUS command, so reads are always issued in pairs by the library helpers.
-    sensor.readRawAngle();
-    const uint16_t raw = sensor.readRawAngle();
-    const bool errFlag = sensor.isErrorFlag();
-    const EncoderDiagnostics diag = readEncoderDiagnostics(sensor);
-    const uint16_t mag = sensor.readMagnitude() & 0x3FFF;
-    const EncoderErrors err = clearEncoderErrors(sensor);
+    encoderReadRaw();
+    const uint16_t raw = encoderReadRaw();
+    const bool errFlag = encoderErrorFlag();
+    const EncoderDiagnostics diag = encoderDiagnostics();
+    const uint16_t mag = encoderReadMagnitude();
+    const EncoderErrors err = encoderClearErrors();
 
-    Serial.println(F("--- " ENCODER_NAME " snapshot ---"));
-    kv("raw", (long)raw); kv("deg", raw * 360.0f / ENCODER_CPR, 2); kv("errFlag", (long)errFlag);
+    Serial.print(F("--- ")); Serial.print(encoderName()); Serial.println(F(" snapshot ---"));
+    kv("raw", (long)raw); kv("deg", raw * 360.0f / encoderCountsPerRev(), 2); kv("errFlag", (long)errFlag);
     Serial.println();
     kv("AGC", (long)diag.agc); kv("offsetReady", (long)diag.offsetReady); kv("COF", (long)diag.cordicOverflow);
     kv("fieldWeak", (long)diag.fieldTooWeak); kv("fieldStrong", (long)diag.fieldTooStrong); kv("magnitude", (long)mag);
@@ -147,33 +150,34 @@ static void sensorSnapshot() {
 // stationary sensor shows a spread of a few counts and no glitches.
 static void sensorNoiseTest(long n) {
     if (n < 10) n = 2000;
-    sensor.readRawAngle();
-    const uint16_t first = sensor.readRawAngle();
+    const int32_t cpr = (int32_t)encoderCountsPerRev();
+    encoderReadRaw();
+    const uint16_t first = encoderReadRaw();
     int32_t minD = 0, maxD = 0;
     uint32_t errFlags = 0, stuck = 0, glitches = 0;
     uint16_t prev = first;
     const uint32_t t0 = micros();
     for (long i = 0; i < n; i++) {
-        const uint16_t r = sensor.readRawAngle();
-        if (sensor.isErrorFlag()) errFlags++;
+        const uint16_t r = encoderReadRaw();
+        if (encoderErrorFlag()) errFlags++;
         if (r == 0 || r == 0x3FFF) stuck++;
         int32_t d = (int32_t)r - (int32_t)first;
-        if (d >  ENCODER_CPR / 2) d -= ENCODER_CPR;
-        if (d < -ENCODER_CPR / 2) d += ENCODER_CPR;
+        if (d >  cpr / 2) d -= cpr;
+        if (d < -cpr / 2) d += cpr;
         if (d < minD) minD = d;
         if (d > maxD) maxD = d;
         int32_t step = (int32_t)r - (int32_t)prev;
-        if (step >  ENCODER_CPR / 2) step -= ENCODER_CPR;
-        if (step < -ENCODER_CPR / 2) step += ENCODER_CPR;
+        if (step >  cpr / 2) step -= cpr;
+        if (step < -cpr / 2) step += cpr;
         if (abs(step) > 50) glitches++;   // >1 deg between back-to-back reads at rest
         prev = r;
     }
     const uint32_t dt = micros() - t0;
-    const EncoderErrors err = clearEncoderErrors(sensor);
+    const EncoderErrors err = encoderClearErrors();
 
-    Serial.println(F("--- " ENCODER_NAME " noise test (hold the wheel still) ---"));
+    Serial.print(F("--- ")); Serial.print(encoderName()); Serial.println(F(" noise test (hold the wheel still) ---"));
     kv("samples", n); kv("us/read", (float)dt / n, 2); Serial.println();
-    kv("spread_counts", (long)(maxD - minD)); kv("spread_deg", (maxD - minD) * 360.0f / ENCODER_CPR, 3);
+    kv("spread_counts", (long)(maxD - minD)); kv("spread_deg", (maxD - minD) * 360.0f / cpr, 3);
     Serial.println();
     kv("errFlags", (long)errFlags); kv("rawStuck(0/3FFF)", (long)stuck); kv("glitches", (long)glitches);
     kv("parityErr", (long)err.parityError); kv("framingErr", (long)err.framingError);
@@ -273,7 +277,7 @@ static void printSupplyVoltage() {
     }
     if (lastVin < SUPPLY_VOLTAGE_MIN)
         Serial.println(F("!! VIN low/absent - is the motor supply connected (not just USB)?"));
-#if defined(SUPPLY_SENSE_ADC_DIVIDER)
+#if defined(VSENS_CALIBRATION)
     Serial.print(F("Check with a multimeter; if off, set VSENS_CALIBRATION = meter / reported (now "));
     Serial.print(VSENS_CALIBRATION, 4); Serial.println(F(")."));
 #endif
@@ -298,11 +302,6 @@ static bool ensurePowerStage() {
     }
     delay(100);
     printDRV8316Status();
-    if (!drv8316Responding(driver)) {
-        Serial.println(F("!! DRV8316 register read-back failed: no motor supply, or firmware built for another board"));
-        Serial.print  (F("!! (this build: ")); Serial.print(BOARD_MODEL); Serial.println(F("). Power stage NOT enabled."));
-        return false;
-    }
 
     motor.linkDriver(&driver);
     motor.linkSensor(&sensor);
@@ -429,12 +428,12 @@ static void revolutionTest(float revs) {
 static void currentSenseTest() {
     if (!ensurePowerStage()) return;
     if (!currentSenseReady) {
-#if CURRENT_SENSE_CALIBRATE_WITH_PWM
-        motor.enable();          // PWM must be running for low-side sampling/offset calibration
-        delay(50);
-#endif
+        if (currentSenseCalibratesWithPwm()) {
+            motor.enable();      // PWM must be running for low-side sampling/offset calibration
+            delay(50);
+        }
         const bool ok = current_sense.init();
-        supplyCurrentSenseStarted();   // the V_SENS divider must stop using analogRead() now
+        supplyCurrentSenseStarted();   // e.g. the V_SENS divider must stop using analogRead() now
         if (!ok) {
             Serial.println(F("!! current_sense.init() failed (ADC config / timer sync)."));
             motor.disable();
@@ -444,8 +443,8 @@ static void currentSenseTest() {
         motor.linkCurrentSense(&current_sense);
         motor.disable();
     }
-    Serial.println(F("--- Current sense (" CURRENT_SENSE_NAME ", motor at 0 V) ---"));
-    Serial.println(F("Offsets are ADC volts at zero current; expect " CURRENT_SENSE_OFFSET_HINT "."));
+    Serial.print(F("--- Current sense (")); Serial.print(currentSenseName()); Serial.println(F(", motor at 0 V) ---"));
+    Serial.print(F("Offsets are ADC volts at zero current; expect ")); Serial.print(currentSenseOffsetHint()); Serial.println('.');
     kv("offA_V", current_sense.offset_ia, 3); kv("offB_V", current_sense.offset_ib, 3); kv("offC_V", current_sense.offset_ic, 3);
     Serial.println();
     kv("gainA", current_sense.gain_a, 3); kv("gainB", current_sense.gain_b, 3); kv("gainC", current_sense.gain_c, 3);
@@ -600,7 +599,7 @@ static void serviceRunning() {
 static void printHelp() {
     Serial.println(F("=== " BOARD_MODEL " test firmware ==="));
     Serial.println(F(" Sensor (motor off):"));
-    Serial.println(F("  s            " ENCODER_NAME " snapshot: angle, AGC, magnitude, field/error flags"));
+    Serial.print  (F("  s            ")); Serial.print(encoderName()); Serial.println(F(" snapshot: angle, AGC, magnitude, field/error flags"));
     Serial.println(F("  n [N]        noise/glitch test, N reads at rest (default 2000)"));
     Serial.println(F("  w            watch angle while turning by hand"));
     Serial.println(F(" Power stage:"));
@@ -609,11 +608,8 @@ static void printHelp() {
     Serial.print  (F(" V, max ")); Serial.print(MAX_TEST_VOLTAGE, 1); Serial.println(F(")"));
     Serial.println(F("  ol <rad/s>   open-loop velocity (shaft rad/s, try 2), streams sensor speed"));
     Serial.println(F("  rev [n]      open-loop n revolutions -> pole pairs + direction check"));
-#if defined(SUPPLY_SENSE_ADC_DIVIDER)
-    Serial.println(F("  vin          measure supply voltage on V_SENS (only before `cs`)"));
-#else
-    Serial.println(F("  vin          supply voltage and current (INA226)"));
-#endif
+    Serial.print  (F("  vin          supply voltage (and input current if measured), "));
+    Serial.println(supplySensorName());
     Serial.println(F("  cs           init current sense, print offsets and currents at rest"));
     Serial.println(F("  hold [volts] lock field on phase A axis, stream DC phase currents + SOx volts"));
     Serial.println(F("  foc          run SimpleFOC sensor alignment (initFOC)"));
@@ -717,7 +713,7 @@ void setup() {
     SimpleFOCDebug::enable(&Serial);
     SimpleFOC_CORDIC_Config();
 
-    sensor.init(&SPI_1);
+    encoderInit(&SPI_1);
     supplyBegin();
     float vin;
     if (readSupplyVoltage(vin)) lastVin = vin;

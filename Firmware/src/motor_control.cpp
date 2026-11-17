@@ -5,8 +5,12 @@
 #include <IWatchdog.h>
 #include <cmath>
 
-#include "board.h"
-#include "hw/board_hw.h"
+#include "drivers/drv8316/drv8316.h"
+
+#include "board_config.h"
+#include "hw/encoder.h"
+#include "hw/current_sense.h"
+#include "hw/drv8316_setup.h"
 #include "hw/supply.h"
 #include "can_protocol.h"
 #include "can_bus.h"
@@ -23,10 +27,10 @@ BLDCMotor motor = BLDCMotor(MOTOR_POLE_PAIRS);
 //  - phB_h, phC_l - C phase pwm pin high/low pair
 static DRV8316Driver6PWM driver = DRV8316Driver6PWM(PHA_H, PHA_L, PHB_H, PHB_L, PHC_H, PHC_L, DRV_CS, false);
 
-// Current sense and encoder types come from the board header (see hw/board_hw.h).
-static BoardCurrentSense current_sense(BOARD_CURRENT_SENSE_ARGS);
+// Current sense and encoder: the parts the board header selects (src/parts/).
+static CurrentSense &current_sense = boardCurrentSense();
 
-static BoardEncoder sensor(BOARD_ENCODER_ARGS);
+static Sensor &sensor = boardEncoder();
 
 // Commanded current (A, already direction-corrected). Only written through
 // setTargetCurrent() and the command timeout.
@@ -41,7 +45,6 @@ static bool start_requested = false;
 static bool calibration_used = false;
 static bool command_timed_out = false;
 static bool drv_fault = false;
-static bool drv_responding = false;
 
 static float supply_voltage = 0;
 
@@ -109,17 +112,9 @@ static void printDRV8316Status() {
 	Serial.println(lock);
 }
 
-static void printDrvNotRespondingWarning() {
-    Serial.println("WARNING: the DRV8316 isn't answering over SPI (register read-back failed).");
-    Serial.println("         Is the motor supply connected? If it is, this firmware may have been");
-    Serial.print  ("         built for a different board (this build: ");
-    Serial.print  (BOARD_MODEL);
-    Serial.println("). Start FOC will retry and refuse to run until it answers.");
-}
-
 void setupFOC() {
     // initialise magnetic sensor hardware
-    sensor.init(&SPI_1);
+    encoderInit(&SPI_1);
     // link the motor to the sensor
     motor.linkSensor(&sensor);
 
@@ -134,11 +129,8 @@ void setupFOC() {
     // small delay to allow SPI response
     delay(10);
 
-    // Buck, protection, slew, PWM mode, CSA gain (see hw/drv8316_setup.cpp).
+    // Buck, protection, slew, PWM mode, current-sense settings (see hw/drv8316_setup.cpp).
     configureDRV8316(driver);
-
-    drv_responding = drv8316Responding(driver);
-    if (!drv_responding) printDrvNotRespondingWarning();
 
     Serial.println("Init complete...");
 
@@ -180,21 +172,6 @@ void setupFOC() {
 static bool startFOC() {
     // Not running yet: make sure nothing stale gets applied on the first move().
     target_current = 0;
-
-    // Without a DRV8316 answering on DRV_CS the PWM pins would still drive
-    // whatever is connected, with the wrong (or no) current sense. Typical
-    // causes: no motor supply at boot (registers were never written, so write
-    // them again now), or firmware built for another board.
-    if (!drv_responding) {
-        configureDRV8316(driver);
-        drv_responding = drv8316Responding(driver);
-        if (!drv_responding) {
-            printDrvNotRespondingWarning();
-            sendError(ERR_DRIVER_SPI);
-            return false;
-        }
-        Serial.println("DRV8316 now answering (registers written again).");
-    }
 
     if (!motor.init()) {
         Serial.println("Motor init failed!");

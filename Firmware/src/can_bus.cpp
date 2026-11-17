@@ -5,12 +5,13 @@
 #include <ACANFD_STM32.h>          // -> fdcan1 object, pins PB8(RX)/PB9(TX)
 #include <ACANFD_STM32_Settings.h> // -> ACANFD_STM32_Settings, DataBitRateFactor
 
-#include "board.h"
+#include "board_config.h"
 #include "can_protocol.h"
 #include "motor_control.h"
 #include "motor_config.h"
 #include "board_settings.h"
 #include "hw/supply.h"
+#include "hw/board_info.h"
 #include "dfu.h"
 
 #include <IWatchdog.h>
@@ -134,10 +135,14 @@ void sendStartResult(bool ok) {
 
 static void sendStatus() {
     // Bytes 3-4: supply voltage in mV, big-endian (0 = no reading yet).
+    // Bytes 5-6 (CAP_INPUT_CURRENT only): input current in mA, int16 big-endian.
     const uint16_t mv = supplyMillivolts();
-    const uint8_t frame[5] = { CMD_DRIVER_STATUS, driverState(), statusFlags(),
-                               (uint8_t)(mv >> 8), (uint8_t)(mv & 0xFF) };
-    sendFrame(frame, sizeof(frame), telemetryCanId());
+    const uint16_t ma = (uint16_t)supplyMilliamps();
+    const uint8_t frame[7] = { CMD_DRIVER_STATUS, driverState(), statusFlags(),
+                               (uint8_t)(mv >> 8), (uint8_t)(mv & 0xFF),
+                               (uint8_t)(ma >> 8), (uint8_t)(ma & 0xFF) };
+    const uint8_t len = (boardCapabilities() & CAP_INPUT_CURRENT) ? 7 : 5;
+    sendFrame(frame, len, telemetryCanId());
 }
 
 // Work that has to wait until the reply has gone out (it stops the CPU or
@@ -161,6 +166,32 @@ static void replyGetInfo() {
     const uint8_t frame[8] = { CMD_GET_INFO, CAN_PROTOCOL_VERSION,
                                FIRMWARE_VERSION_MAJOR, FIRMWARE_VERSION_MINOR, FIRMWARE_VERSION_PATCH,
                                (uint8_t)min<uint32_t>(kb, 255), BOARD_ID, BOARD_HW_REV };
+    sendFrame(frame, sizeof(frame), telemetryCanId());
+}
+
+static void replyGetBoardInfo(uint8_t page) {
+    uint8_t frame[8] = { CMD_GET_BOARD_INFO, page, 0, 0, 0, 0, 0, 0 };
+    if (page == 0) {
+        const uint32_t caps = boardCapabilities();
+        frame[2] = (uint8_t)(caps >> 24);
+        frame[3] = (uint8_t)(caps >> 16);
+        frame[4] = (uint8_t)(caps >> 8);
+        frame[5] = (uint8_t)caps;
+        frame[6] = BOARD_ID;
+        frame[7] = BOARD_HW_REV;
+    } else if (page <= 5) {
+        // Characters (page-1)*6 .. +5 of the model name, NUL-padded.
+        const char *model = boardModel();
+        const size_t len = strlen(model);
+        for (size_t i = 0; i < 6; i++) {
+            const size_t at = (size_t)(page - 1) * 6 + i;
+            frame[2 + i] = at < len ? (uint8_t)model[at] : 0;
+        }
+    } else {
+        const uint8_t nack[3] = { CMD_NACK, CMD_GET_BOARD_INFO, CONFIG_ERR_BAD_VALUE };
+        sendFrame(nack, sizeof(nack), telemetryCanId());
+        return;
+    }
     sendFrame(frame, sizeof(frame), telemetryCanId());
 }
 
@@ -259,6 +290,9 @@ static void handleCommandMessage(const CANFDMessage &rxMsg) {
         }
         case CMD_GET_INFO:
             replyGetInfo();
+            break;
+        case CMD_GET_BOARD_INFO:
+            replyGetBoardInfo(rxMsg.len >= 2 ? rxMsg.data[1] : 0);
             break;
         case CMD_GET_CONFIG:
             replyGetConfig(rxMsg.len >= 2 && rxMsg.data[1] ? 1 : 0);

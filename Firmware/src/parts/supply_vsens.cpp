@@ -17,9 +17,12 @@
 // The regular conversion is started in one call and collected in a later one
 // (no busy-waiting in the FOC loop).
 
-#include "supply.h"
+#include "board_config.h"
 
 #if defined(SUPPLY_SENSE_ADC_DIVIDER)
+
+#include "hw/supply.h"
+#include "can_protocol.h"
 
 #include <Arduino.h>
 #include <PeripheralPins.h>
@@ -145,6 +148,8 @@ void sampleRegular(uint32_t now) {
 
 const char *supplySensorName() { return "V_SENS"; }
 
+uint32_t supplyCapabilities() { return CAP_SUPPLY_VOLTAGE; }
+
 void supplyBegin() {
     // The first sample (one interval from now) seeds the filter. Not seeded
     // from measuredSupplyVoltageOrDefault(): that returns the 12 V fallback
@@ -183,5 +188,7 @@ void updateSupplyMonitor() {
 }
 
 float supplyVoltageNow() { return haveValue ? filtered : 0.0f; }
+
+bool supplyCurrentNow(float &) { return false; }
 
 #endif // SUPPLY_SENSE_ADC_DIVIDER

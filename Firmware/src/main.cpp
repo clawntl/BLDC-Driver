@@ -6,7 +6,7 @@
 
 #include "utilities/stm32math/STM32G4CORDICTrigFunctions.h"
 
-#include "board.h"
+#include "board_config.h"
 #include "motor_config.h"
 #include "board_settings.h"
 #include "can_bus.h"

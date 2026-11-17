@@ -24,8 +24,10 @@
 
 // Version of this protocol (reported by CMD_GET_INFO). 1 = start/telemetry/
 // status only (no CMD_GET_INFO reply); 2 = adds the configuration commands;
-// 3 = node IDs instead of left/right (new current frame and telemetry IDs).
-#define CAN_PROTOCOL_VERSION 3
+// 3 = node IDs instead of left/right (new current frame and telemetry IDs);
+// 4 = CMD_GET_BOARD_INFO (model name + capabilities) and input current in
+//     the heartbeat (CAP_INPUT_CURRENT).
+#define CAN_PROTOCOL_VERSION 4
 
 // Firmware version, reported by CMD_GET_INFO and the serial `config` command.
 #define FIRMWARE_VERSION_MAJOR 1
@@ -42,8 +44,11 @@ enum CAN_CMD : uint8_t {
 
     // Driver -> host, every CAN_STATUS_INTERVAL_MS (also while FOC is not running).
     // [0x03][DriverState][status flags (STATUS_FLAG_*)][supply mV, uint16 big-endian]
+    //      [input current mA, int16 big-endian]   <- only with CAP_INPUT_CURRENT
     // The host can wait for DRIVER_STATE_IDLE before sending CMD_START_FOC.
     // Supply mV = 0 means no reading yet (firmware before this field also sent 0).
+    // Input current: positive = drawn from the supply; INT16_MIN (0x8000) = no
+    // reading. Boards without CAP_INPUT_CURRENT send 5 bytes.
     CMD_DRIVER_STATUS = 0x03,
 
     // Host -> driver: start FOC (motor init + alignment, blocks ~1-3 s).
@@ -85,6 +90,16 @@ enum CAN_CMD : uint8_t {
     // [0x26] -> [0x26][status], then the board resets (motor stops).
     CMD_REBOOT = 0x26,
 
+    // Board description (protocol 4), so a host needs no table of boards:
+    // [0x27][page] ->
+    //   page 0:    [0x27][0][capabilities, uint32 big-endian (CAP_*)][board ID][hw rev]
+    //   page 1-5:  [0x27][page][6 characters of the model name, e.g. "MiniFO"]
+    //              (pages 1-5 = characters 0-29; NUL-padded after the end, so
+    //              stop at the first page containing a NUL)
+    //   other:     [0xFE][0x27][CONFIG_ERR_BAD_VALUE]
+    // Firmware before protocol 4 NACKs it ([0xFE][0x27][CONFIG_ERR_UNKNOWN]).
+    CMD_GET_BOARD_INFO = 0x27,
+
     // Driver -> host: [0xFE][command byte][CONFIG_ERR_UNKNOWN]: command not
     // understood (e.g. a newer host talking to this firmware).
     CMD_NACK = 0xFE,
@@ -122,6 +137,14 @@ enum ConfigFlag : uint8_t {
     CONFIG_FLAG_UNSAVED         = 1 << 3, // pending differs from active (needs CMD_SAVE)
 };
 
+// CMD_GET_BOARD_INFO capability bits: features a host can use, independent
+// of which board it is. Add a bit when a board gains something the host can
+// see; never reuse one.
+enum BoardCapability : uint32_t {
+    CAP_SUPPLY_VOLTAGE = 1u << 0, // heartbeat supply mV is a measurement
+    CAP_INPUT_CURRENT  = 1u << 1, // heartbeat bytes 5-6: input current in mA
+};
+
 enum DriverState : uint8_t {
     DRIVER_STATE_UNCONFIGURED = 0, // never sent (CAN is off until configured)
     DRIVER_STATE_IDLE         = 1, // waiting for CMD_START_FOC
@@ -141,6 +164,4 @@ enum CAN_ERROR : uint8_t {
     ERR_CURRENT_SENSE     = 2, // current sense init failed
     ERR_FOC_INIT          = 3, // initFOC() failed (sensor/current-sense alignment)
     ERR_DRIVER_FAULT      = 4, // DRV8316 fault flag set
-    ERR_DRIVER_SPI        = 5, // DRV8316 not answering over SPI at Start FOC (no motor
-                               // supply, or firmware built for a different board)
 };

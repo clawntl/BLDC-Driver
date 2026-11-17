@@ -43,3 +43,12 @@ uint16_t supplyMillivolts() {
     if (mv > 65535.0f) return 65535;
     return (uint16_t)lroundf(mv);
 }
+
+int16_t supplyMilliamps() {
+    float a;
+    if (!supplyCurrentNow(a)) return INT16_MIN;
+    const float ma = a * 1000.0f;
+    if (ma >  32767.0f) return 32767;
+    if (ma < -32767.0f) return -32767;
+    return (int16_t)lroundf(ma);
+}
