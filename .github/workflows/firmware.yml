@@ -6,9 +6,9 @@ name: Firmware
 
 on:
   push:
-    paths: ["Firmware/**", ".github/workflows/firmware.yml"]
+    paths: ["Firmware/**", "!Firmware/tools/**", ".github/workflows/firmware.yml"]
   pull_request:
-    paths: ["Firmware/**", ".github/workflows/firmware.yml"]
+    paths: ["Firmware/**", "!Firmware/tools/**", ".github/workflows/firmware.yml"]
   workflow_dispatch:
 
 jobs:

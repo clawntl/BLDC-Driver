@@ -1,6 +1,20 @@
 # CAN protocol
 
-The definitions live in [`Firmware/include/can_protocol.h`](../Firmware/include/can_protocol.h).
+The definitions live in [`Firmware/include/can_protocol.h`](../Firmware/include/can_protocol.h). To try the protocol from a PC, use the [CAN test tools](can-tools.md).
+
+## Protocol versions
+
+The protocol version is reported by `CMD_GET_INFO`, separately from the firmware version:
+
+| Protocol | Firmware | Adds |
+|---|---|---|
+| 1 | 1.0 | Start FOC, current commands, velocity telemetry, status heartbeat, errors. Left/right boards |
+| 2 | 1.1 | Configuration over CAN (`CMD_GET_INFO` … `CMD_REBOOT`); the supply voltage in the heartbeat |
+| 3 | 1.2 | Node IDs 1–15 instead of left/right (the IDs below) |
+| 4 | 1.3 | `CMD_GET_BOARD_INFO` (model name, capabilities); input current in the heartbeat on boards with `CAP_INPUT_CURRENT`; board ID and revision in `CMD_GET_INFO` |
+
+## Basics
+
 
 - **Bus:** classic CAN 2.0, standard 11-bit IDs, **1 Mbit/s**, 87.5 % sample point (no FD or bit-rate switching).
 - **Floats:** IEEE-754 single precision, **big-endian** (most significant byte first).

@@ -29,6 +29,7 @@ The board includes an optional **AS5048A** magnetic encoder on a break-away tab.
 | [`Hardware/production/`](Hardware/production) | Fabrication outputs: Gerber zip, BOM and pick-and-place files (JLCPCB/LCSC part numbers) |
 | [`schematic_v0.2.pdf`](schematic_v0.2.pdf) | PDF export of the schematic |
 | [`Firmware/`](Firmware) | PlatformIO firmware: the CAN motor driver and a bench-test build, for this board and compatible ones such as [MiniFOC](https://github.com/clawntl/MiniFOC) |
+| [`Firmware/tools/can_test/`](Firmware/tools/can_test) | CAN bench test tools for the PC (GUI and command line) |
 | [`Images/`](Images) | Pinout diagram |
 | [`docs/`](docs) | Detailed documentation (see below) |
 
@@ -38,6 +39,7 @@ The board includes an optional **AS5048A** magnetic encoder on a break-away tab.
 - **[Firmware guide](docs/firmware.md)**: building, flashing, first-time configuration, the serial console, tuning parameters and the bench-test firmware.
 - **[Test routines](docs/test-routines.md)**: step-by-step bench testing of a board, motor and encoder with the `motor_test` firmware, with expected readings and troubleshooting.
 - **[CAN protocol](docs/can-protocol.md)**: message IDs, frame formats, status and error codes, plus an example host program.
+- **[CAN test tools](docs/can-tools.md)**: a GUI and a command-line tool to drive, test, monitor and configure boards over CAN from a PC.
 
 ## Quick start
 
@@ -79,3 +81,5 @@ This is hardware revision **v0.2**. The firmware's default motor parameters (11 
 This project is shared under the terms of the [GNU Affero General Public License Version 3](https://choosealicense.com/licenses/agpl-3.0/) as published by the Free Software Foundation.
 
 The bundled [`ACANFD_STM32_G431`](Firmware/lib/ACANFD_STM32_G431) library is a stripped-down fork of Pierre Molinaro's [ACANFD-STM32](https://github.com/pierremolinaro/acanfd-stm32) and keeps its own MIT license.
+
+The CAN test tools bundle ElmüSoft's Candlelight Python classes in [`Firmware/tools/can_test/elmue`](Firmware/tools/can_test/elmue), unmodified, under their own BSD 3-Clause license.
