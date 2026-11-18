@@ -1,0 +1,235 @@
+(footprint "NRVBSS14HE"
+	(version 20241229)
+	(generator "pcbnew")
+	(generator_version "9.0")
+	(layer "F.Cu")
+	(descr "NRVBSS14HE-1")
+	(tags "Schottky Diode")
+	(property "Reference" "D**"
+		(at 0 -1.7 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "f75de78e-3a62-4a0a-97f4-816a57683d8c")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.254)
+			)
+		)
+	)
+	(property "Value" "NRVBSS14HE"
+		(at -0.375 0 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "f7bbcaa4-b16f-447d-b38e-6e8a3da1e2bf")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.254)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "6e2ee53c-229f-4a04-b4dd-696735a4f637")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "e0d4e5f8-04e4-45e5-b068-9c15d616f3c5")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(fp_line
+		(start -1.85 -0.75)
+		(end -1.85 -0.75)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "3ff232fb-441d-4f8b-8a92-597caead8d59")
+	)
+	(fp_line
+		(start -1.85 -0.75)
+		(end -1.85 -0.75)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "5b5c63e9-6c61-4040-b2fc-495a04cd8ca9")
+	)
+	(fp_line
+		(start -1.75 -0.75)
+		(end -1.75 -0.75)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "069ee126-b6f1-48cb-a104-5be2d75b547c")
+	)
+	(fp_arc
+		(start -1.85 -0.75)
+		(mid -1.8 -0.8)
+		(end -1.75 -0.75)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "bab223c2-8143-4790-a3ee-93b3e9e5243a")
+	)
+	(fp_arc
+		(start -1.75 -0.75)
+		(mid -1.8 -0.7)
+		(end -1.85 -0.75)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "8d8b3896-7764-4db8-bb00-0f49fb1fe83e")
+	)
+	(fp_arc
+		(start -1.75 -0.75)
+		(mid -1.8 -0.7)
+		(end -1.85 -0.75)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "a3643ffb-9abb-43f5-8e27-30d6da4ed24d")
+	)
+	(fp_line
+		(start -2.1 -1.1)
+		(end 2 -1.1)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "76a84595-788d-4c17-b2b2-b0d4c18d0823")
+	)
+	(fp_line
+		(start -2.1 1.1)
+		(end -2.1 -1.1)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "1604dc39-a6fe-49b3-8722-62b32af78901")
+	)
+	(fp_line
+		(start 2 -1.1)
+		(end 2 1.1)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "fa38e987-fb38-4744-9fe2-9cd16c5812f3")
+	)
+	(fp_line
+		(start 2 1.1)
+		(end -2.1 1.1)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "251d62e3-18b1-421d-9574-992c7535c798")
+	)
+	(fp_line
+		(start -1.012 -0.637)
+		(end -1.012 0.638)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "3bf0650c-8ffb-409d-87c1-609079fe4685")
+	)
+	(fp_line
+		(start -1.012 0.638)
+		(end 1.012 0.638)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "86744c26-3ed5-4e86-a88e-cef66999da15")
+	)
+	(fp_line
+		(start 1.012 -0.637)
+		(end -1.012 -0.637)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "d4407793-46f2-44d8-a91e-c9aed9c084be")
+	)
+	(fp_line
+		(start 1.012 0.638)
+		(end 1.012 -0.637)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "e0f7ed9a-088a-4b6a-80c0-9735311e4fe6")
+	)
+	(fp_text user "${REFERENCE}"
+		(at -0.3 1.8 0)
+		(layer "F.Fab")
+		(uuid "638a8f9e-74df-4207-8445-c07f95fb529f")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.254)
+			)
+		)
+	)
+	(pad "1" smd rect
+		(at -0.65 0 90)
+		(size 1.1 2)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "642c3e9b-6d43-4e44-9b5a-39c80f80d3b3")
+	)
+	(pad "2" smd rect
+		(at 1.25 0)
+		(size 0.8 1.1)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "24d4d203-6ac7-4df7-bf33-86c4f9a30a15")
+	)
+	(embedded_fonts no)
+	(model "${KIPRJMOD}/MotorDriverParts.pretty/CAD/NRVBSS14HE.stp"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)

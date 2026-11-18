@@ -1,0 +1,62 @@
+name: Firmware
+
+# Builds the firmware and bench-test firmware of every board folder in
+# Firmware/boards/, so a change made for one board can't silently break
+# another. New boards are picked up automatically.
+
+on:
+  push:
+    paths: ["Firmware/**", "!Firmware/tools/**", ".github/workflows/firmware.yml"]
+  pull_request:
+    paths: ["Firmware/**", "!Firmware/tools/**", ".github/workflows/firmware.yml"]
+  workflow_dispatch:
+
+jobs:
+  boards:
+    runs-on: ubuntu-latest
+    outputs:
+      boards: ${{ steps.list.outputs.boards }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: |
+          boards=$(ls -d Firmware/boards/*/ | xargs -n1 basename | jq -R . | jq -cs .)
+          echo "boards=$boards" >> "$GITHUB_OUTPUT"
+          echo "Boards: $boards"
+
+  build:
+    needs: boards
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        board: ${{ fromJson(needs.boards.outputs.boards) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ hashFiles('Firmware/platformio.ini') }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install platformio
+      - name: Build ${{ matrix.board }} and ${{ matrix.board }}_test
+        working-directory: Firmware
+        run: pio run -e ${{ matrix.board }} -e ${{ matrix.board }}_test
+      # The settings live in the last 2 KB flash page, so the real firmware
+      # must stay below 126 KB (see docs/firmware.md, "Flash size limit").
+      - name: Size check
+        working-directory: Firmware
+        run: |
+          size=$(stat -c%s .pio/build/${{ matrix.board }}/firmware.bin)
+          echo "firmware.bin: $size bytes"
+          if [ "$size" -gt 129024 ]; then
+            echo "::error::Image overlaps the settings flash page (> 126 KB)"; exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.board }}
+          path: Firmware/.pio/build/${{ matrix.board }}*/firmware.bin

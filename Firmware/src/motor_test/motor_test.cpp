@@ -1,12 +1,13 @@
 // =============================================================================
-//  Motor / sensor bring-up test firmware for the STM32G431 + DRV8316 + AS5048A
-//  BLDC driver board.
+//  Motor / sensor bring-up test firmware for the STM32G431 + DRV8316 boards
+//  (BLDC-Driver, MiniFOC; the board is chosen by the PlatformIO environment).
 //
-//  Built ONLY by the `motor_test` PlatformIO environment (see platformio.ini).
-//  The normal `driver` build excludes this folder, and this build
-//  excludes main.cpp / motor_control.cpp / can_bus.cpp. It shares pins.h,
-//  motor_config.h, clock_config.cpp and dfu.cpp with the real firmware so the
-//  hardware setup can't drift from what the robot actually runs.
+//  Built ONLY by the `<board>_test` PlatformIO environments (see
+//  platformio.ini). The normal board builds exclude this folder, and this
+//  build excludes main.cpp / motor_control.cpp / can_bus.cpp. It shares the
+//  board header (board_config.h), motor_config.h, the hardware layer (src/hw/ and
+//  src/parts/), clock_config.cpp and dfu.cpp with the real firmware so the hardware setup
+//  can't drift from what the robot actually runs.
 //
 //  No CAN: everything is driven from the USB serial console (115200, send a
 //  newline after each command). Type `help` for the command list.
@@ -30,26 +31,20 @@
 #include <SimpleFOC.h>
 #include <SimpleFOCDrivers.h>
 
-#include "encoders/as5048a/MagneticSensorAS5048A.h"
-#include "drivers/drv8316/drv8316.h"
 #include "utilities/stm32math/STM32G4CORDICTrigFunctions.h"
 
-#include "pins.h"
+#include "board_config.h"
 #include "motor_config.h"
 #include "dfu.h"
-#include "supply_voltage.h"
+#include "drivers/drv8316/drv8316.h"
+#include "hw/encoder.h"
+#include "hw/current_sense.h"
+#include "hw/drv8316_setup.h"
+#include "hw/supply.h"
 
 // ---------------------------------------------------------------------------
 //  Test parameters
 // ---------------------------------------------------------------------------
-
-// DRV8316 CSA gain register setting and the matching SimpleFOC gain in mV/A.
-// CAUTION: SimpleFOCDrivers' enum NAMES come from an early DRV8316 register map
-// that TI later confirmed was wrong. The real gains for codes 0..3 are
-// 0.15 / 0.3 / 0.6 / 1.2 V/A, so `Gain_0V25` (code 2) is actually 0.6 V/A =
-// 600 mV/A - which matches motor_control.cpp. Verify on the bench with `cs`.
-#define TEST_CSA_GAIN_SETTING   Gain_0V25   // register code 0b10 = 0.6 V/A
-#define TEST_CSA_MV_PER_A       600.0f
 
 static const float    DEFAULT_TEST_VOLTAGE = 1.0f;   // V, q-axis voltage for open loop
 static const float    MAX_TEST_VOLTAGE     = 4.0f;   // V, hard cap on `v`
@@ -64,8 +59,8 @@ static SPIClass SPI_1(SPI1_MOSI, SPI1_MISO, SPI1_SCK);
 
 static BLDCMotor motor(MOTOR_POLE_PAIRS);
 static DRV8316Driver6PWM driver(PHA_H, PHA_L, PHB_H, PHB_L, PHC_H, PHC_L, DRV_CS, false);
-static LowsideCurrentSense current_sense(TEST_CSA_MV_PER_A, SO_A, SO_B, SO_C);
-static MagneticSensorAS5048A sensor(ENC_CS, false, SPISettings(5'000'000, MSBFIRST, SPI_MODE1));
+static CurrentSense &current_sense = boardCurrentSense();
+static Sensor &sensor = boardEncoder();
 
 // ---------------------------------------------------------------------------
 //  State
@@ -78,7 +73,7 @@ static bool     powerStageReady = false;   // driver configured + motor.init() d
 static bool     currentSenseReady = false;
 static bool     focReady = false;
 static float    testVoltage = DEFAULT_TEST_VOLTAGE;
-static float    lastVin = NAN;              // last V_SENS reading (only valid pre-`cs`)
+static float    lastVin = NAN;              // last VIN reading
 
 static uint32_t modeStartMs = 0;
 static uint32_t commandStartMs = 0;          // when the current command was received
@@ -113,20 +108,20 @@ static float wrapPi(float a) {
 // ---------------------------------------------------------------------------
 
 static void sensorSnapshot() {
-    // The AS5048A answers each SPI frame with the result of the PREVIOUS
-    // command, so reads are always issued in pairs by the library helpers.
-    sensor.readRawAngle();
-    const uint16_t raw = sensor.readRawAngle();
-    const bool errFlag = sensor.isErrorFlag();
-    const AS5048Diagnostics diag = sensor.readDiagnostics();
-    const uint16_t mag = sensor.readMagnitude() & 0x3FFF;
-    const AS5048Error err = sensor.clearErrorFlag();
+    // The AS5048A / AS5047P answer each SPI frame with the result of the
+    // PREVIOUS command, so reads are always issued in pairs by the library helpers.
+    encoderReadRaw();
+    const uint16_t raw = encoderReadRaw();
+    const bool errFlag = encoderErrorFlag();
+    const EncoderDiagnostics diag = encoderDiagnostics();
+    const uint16_t mag = encoderReadMagnitude();
+    const EncoderErrors err = encoderClearErrors();
 
-    Serial.println(F("--- AS5048A snapshot ---"));
-    kv("raw", (long)raw); kv("deg", raw * 360.0f / AS5048A_CPR, 2); kv("errFlag", (long)errFlag);
+    Serial.print(F("--- ")); Serial.print(encoderName()); Serial.println(F(" snapshot ---"));
+    kv("raw", (long)raw); kv("deg", raw * 360.0f / encoderCountsPerRev(), 2); kv("errFlag", (long)errFlag);
     Serial.println();
-    kv("AGC", (long)diag.agc); kv("OCF", (long)diag.ocf); kv("COF", (long)diag.cof);
-    kv("compLow", (long)diag.compLow); kv("compHigh", (long)diag.compHigh); kv("magnitude", (long)mag);
+    kv("AGC", (long)diag.agc); kv("offsetReady", (long)diag.offsetReady); kv("COF", (long)diag.cordicOverflow);
+    kv("fieldWeak", (long)diag.fieldTooWeak); kv("fieldStrong", (long)diag.fieldTooStrong); kv("magnitude", (long)mag);
     Serial.println();
     kv("parityErr", (long)err.parityError); kv("cmdInvalid", (long)err.commandInvalid);
     kv("framingErr", (long)err.framingError);
@@ -138,15 +133,15 @@ static void sensorSnapshot() {
     else if ((diag.reg & 0x3FFF) == 0x3FFF && raw == 0x3FFF)
         Serial.println(F("!! All ones: MISO floating/high - check MISO wiring, CS pin, SPI mode."));
     else {
-        if (!diag.ocf) Serial.println(F("!! OCF=0: offset compensation not finished (sensor just powered / faulty)."));
-        if (diag.cof)  Serial.println(F("!! COF=1: CORDIC overflow - angle data invalid."));
-        if (diag.compHigh) Serial.println(F("!! compHigh=1: magnetic field too WEAK (magnet too far / wrong magnet)."));
-        if (diag.compLow)  Serial.println(F("!! compLow=1: magnetic field too STRONG (magnet too close)."));
+        if (!diag.offsetReady)   Serial.println(F("!! offsetReady=0: offset compensation not finished (sensor just powered / faulty)."));
+        if (diag.cordicOverflow) Serial.println(F("!! COF=1: CORDIC overflow - angle data invalid."));
+        if (diag.fieldTooWeak)   Serial.println(F("!! fieldWeak=1: magnetic field too WEAK (magnet too far / wrong magnet)."));
+        if (diag.fieldTooStrong) Serial.println(F("!! fieldStrong=1: magnetic field too STRONG (magnet too close)."));
         if (diag.agc >= 250)
             Serial.println(F("!! AGC at/near 255 (max gain): field is marginally WEAK - move magnet closer / stronger magnet."));
         else if (diag.agc <= 5)
             Serial.println(F("!! AGC at/near 0 (min gain): field is marginally STRONG - move magnet further away."));
-        else if (diag.ocf && !diag.cof && !diag.compHigh && !diag.compLow)
+        else if (diag.offsetReady && !diag.cordicOverflow && !diag.fieldTooWeak && !diag.fieldTooStrong)
             Serial.println(F("OK: field in range, AGC has headroom both ways. AGC should stay roughly constant through a full turn."));
     }
 }
@@ -155,33 +150,34 @@ static void sensorSnapshot() {
 // stationary sensor shows a spread of a few counts and no glitches.
 static void sensorNoiseTest(long n) {
     if (n < 10) n = 2000;
-    sensor.readRawAngle();
-    const uint16_t first = sensor.readRawAngle();
+    const int32_t cpr = (int32_t)encoderCountsPerRev();
+    encoderReadRaw();
+    const uint16_t first = encoderReadRaw();
     int32_t minD = 0, maxD = 0;
     uint32_t errFlags = 0, stuck = 0, glitches = 0;
     uint16_t prev = first;
     const uint32_t t0 = micros();
     for (long i = 0; i < n; i++) {
-        const uint16_t r = sensor.readRawAngle();
-        if (sensor.isErrorFlag()) errFlags++;
+        const uint16_t r = encoderReadRaw();
+        if (encoderErrorFlag()) errFlags++;
         if (r == 0 || r == 0x3FFF) stuck++;
         int32_t d = (int32_t)r - (int32_t)first;
-        if (d >  AS5048A_CPR / 2) d -= AS5048A_CPR;
-        if (d < -AS5048A_CPR / 2) d += AS5048A_CPR;
+        if (d >  cpr / 2) d -= cpr;
+        if (d < -cpr / 2) d += cpr;
         if (d < minD) minD = d;
         if (d > maxD) maxD = d;
         int32_t step = (int32_t)r - (int32_t)prev;
-        if (step >  AS5048A_CPR / 2) step -= AS5048A_CPR;
-        if (step < -AS5048A_CPR / 2) step += AS5048A_CPR;
+        if (step >  cpr / 2) step -= cpr;
+        if (step < -cpr / 2) step += cpr;
         if (abs(step) > 50) glitches++;   // >1 deg between back-to-back reads at rest
         prev = r;
     }
     const uint32_t dt = micros() - t0;
-    const AS5048Error err = sensor.clearErrorFlag();
+    const EncoderErrors err = encoderClearErrors();
 
-    Serial.println(F("--- AS5048A noise test (hold the wheel still) ---"));
+    Serial.print(F("--- ")); Serial.print(encoderName()); Serial.println(F(" noise test (hold the wheel still) ---"));
     kv("samples", n); kv("us/read", (float)dt / n, 2); Serial.println();
-    kv("spread_counts", (long)(maxD - minD)); kv("spread_deg", (maxD - minD) * 360.0f / AS5048A_CPR, 3);
+    kv("spread_counts", (long)(maxD - minD)); kv("spread_deg", (maxD - minD) * 360.0f / cpr, 3);
     Serial.println();
     kv("errFlags", (long)errFlags); kv("rawStuck(0/3FFF)", (long)stuck); kv("glitches", (long)glitches);
     kv("parityErr", (long)err.parityError); kv("framingErr", (long)err.framingError);
@@ -260,20 +256,31 @@ static void printDRV8316Status() {
     }
 }
 
-// analogRead() de-initialises ADC1, which also serves the current-sense pins,
-// so VIN can only be re-measured until `cs` has configured current sensing.
+// With the V_SENS divider (BLDC-Driver), analogRead() would de-initialise
+// ADC1, which also serves the current-sense pins, so VIN can only be
+// re-measured until `cs` has configured current sensing (readSupplyVoltage()
+// then fails and the last reading is shown). The INA226 reads at any time.
 static void printSupplyVoltage() {
-    if (!currentSenseReady) {
-        lastVin = readSupplyVoltage();
-        Serial.print(F("VIN = ")); Serial.print(lastVin, 2); Serial.println(F(" V"));
-    } else {
+    float vin;
+    if (readSupplyVoltage(vin)) {
+        lastVin = vin;
+        Serial.print(F("VIN = ")); Serial.print(vin, 2); Serial.print(F(" V"));
+        float iin;
+        if (readSupplyCurrent(iin)) { Serial.print(F(", IIN = ")); Serial.print(iin, 3); Serial.print(F(" A")); }
+        Serial.println();
+    } else if (currentSenseReady && !isnan(lastVin)) {
         Serial.print(F("VIN = ")); Serial.print(lastVin, 2);
         Serial.println(F(" V (cached: can't re-measure after `cs` - analogRead would break current sensing; reset to re-measure)"));
+    } else {
+        Serial.print(F("!! Can't read VIN (")); Serial.print(supplySensorName()); Serial.println(F(" not responding)."));
+        return;
     }
     if (lastVin < SUPPLY_VOLTAGE_MIN)
         Serial.println(F("!! VIN low/absent - is the motor supply connected (not just USB)?"));
+#if defined(VSENS_CALIBRATION)
     Serial.print(F("Check with a multimeter; if off, set VSENS_CALIBRATION = meter / reported (now "));
     Serial.print(VSENS_CALIBRATION, 4); Serial.println(F(")."));
+#endif
 }
 
 // Mirrors setupFOC() in motor_control.cpp, then motor.init() (which ENABLES
@@ -287,15 +294,7 @@ static bool ensurePowerStage() {
     driver.voltage_limit = min(MOTOR_VOLTAGE_LIMIT, driver.voltage_power_supply);
     driver.init(&SPI_1);
     delay(10);
-    driver.setBuckVoltage(VB_5V);
-    delay(500);
-    driver.setOCPLevel(Curr_16A);             delayMicroseconds(1);
-    driver.setOCPMode(AutoRetry_Fault);        delayMicroseconds(1);
-    driver.setOCPRetryTime(Retry500ms);        delayMicroseconds(1);
-    driver.setSlew(Slew_200Vus);               delayMicroseconds(1);
-    driver.setPWM100Frequency(FREQ_20KHz);     delayMicroseconds(1);
-    driver.setCurrentSenseGain(TEST_CSA_GAIN_SETTING); delayMicroseconds(1);
-    driver.setPWMMode(PWM6_Mode);              delayMicroseconds(1);
+    configureDRV8316(driver);                  // same as the real firmware (hw/drv8316_setup.cpp)
 
     if (!driver.initialized) {
         Serial.println(F("!! BLDCDriver6PWM init failed (PWM pin/timer config)."));
@@ -429,10 +428,14 @@ static void revolutionTest(float revs) {
 static void currentSenseTest() {
     if (!ensurePowerStage()) return;
     if (!currentSenseReady) {
-        motor.enable();          // PWM must be running for low-side sampling/offset calibration
-        delay(50);
-        if (!current_sense.init()) {
-            Serial.println(F("!! current_sense.init() failed (ADC/timer sync)."));
+        if (currentSenseCalibratesWithPwm()) {
+            motor.enable();      // PWM must be running for low-side sampling/offset calibration
+            delay(50);
+        }
+        const bool ok = current_sense.init();
+        supplyCurrentSenseStarted();   // e.g. the V_SENS divider must stop using analogRead() now
+        if (!ok) {
+            Serial.println(F("!! current_sense.init() failed (ADC config / timer sync)."));
             motor.disable();
             return;
         }
@@ -440,8 +443,8 @@ static void currentSenseTest() {
         motor.linkCurrentSense(&current_sense);
         motor.disable();
     }
-    Serial.println(F("--- Current sense (motor at 0 V) ---"));
-    Serial.println(F("Offsets are ADC volts at zero current; expect ~half the CSA reference (DRV8316 VREF/2)."));
+    Serial.print(F("--- Current sense (")); Serial.print(currentSenseName()); Serial.println(F(", motor at 0 V) ---"));
+    Serial.print(F("Offsets are ADC volts at zero current; expect ")); Serial.print(currentSenseOffsetHint()); Serial.println('.');
     kv("offA_V", current_sense.offset_ia, 3); kv("offB_V", current_sense.offset_ib, 3); kv("offC_V", current_sense.offset_ic, 3);
     Serial.println();
     kv("gainA", current_sense.gain_a, 3); kv("gainB", current_sense.gain_b, 3); kv("gainC", current_sense.gain_c, 3);
@@ -594,9 +597,9 @@ static void serviceRunning() {
 // ---------------------------------------------------------------------------
 
 static void printHelp() {
-    Serial.println(F("=== BLDC driver test firmware ==="));
+    Serial.println(F("=== " BOARD_MODEL " test firmware ==="));
     Serial.println(F(" Sensor (motor off):"));
-    Serial.println(F("  s            AS5048A snapshot: angle, AGC, magnitude, field/error flags"));
+    Serial.print  (F("  s            ")); Serial.print(encoderName()); Serial.println(F(" snapshot: angle, AGC, magnitude, field/error flags"));
     Serial.println(F("  n [N]        noise/glitch test, N reads at rest (default 2000)"));
     Serial.println(F("  w            watch angle while turning by hand"));
     Serial.println(F(" Power stage:"));
@@ -605,7 +608,8 @@ static void printHelp() {
     Serial.print  (F(" V, max ")); Serial.print(MAX_TEST_VOLTAGE, 1); Serial.println(F(")"));
     Serial.println(F("  ol <rad/s>   open-loop velocity (shaft rad/s, try 2), streams sensor speed"));
     Serial.println(F("  rev [n]      open-loop n revolutions -> pole pairs + direction check"));
-    Serial.println(F("  vin          measure supply voltage on V_SENS (only before `cs`)"));
+    Serial.print  (F("  vin          supply voltage (and input current if measured), "));
+    Serial.println(supplySensorName());
     Serial.println(F("  cs           init current sense, print offsets and currents at rest"));
     Serial.println(F("  hold [volts] lock field on phase A axis, stream DC phase currents + SOx volts"));
     Serial.println(F("  foc          run SimpleFOC sensor alignment (initFOC)"));
@@ -699,7 +703,7 @@ void setup() {
     pinMode(ENC_CS, OUTPUT); digitalWrite(ENC_CS, HIGH);
 
     pinMode(LED_BUILTIN, OUTPUT);
-    pinMode(DFU_BUTTON, INPUT);
+    initDfuButton();
     pinMode(SO_A, INPUT);
     pinMode(SO_B, INPUT);
     pinMode(SO_C, INPUT);
@@ -709,8 +713,10 @@ void setup() {
     SimpleFOCDebug::enable(&Serial);
     SimpleFOC_CORDIC_Config();
 
-    sensor.init(&SPI_1);
-    lastVin = readSupplyVoltage();
+    encoderInit(&SPI_1);
+    supplyBegin();
+    float vin;
+    if (readSupplyVoltage(vin)) lastVin = vin;
 
     digitalWrite(LED_BUILTIN, HIGH);
 
@@ -723,7 +729,7 @@ void setup() {
         checkDfuButton();
         if (millis() - lastPrompt >= 2000) {
             lastPrompt = millis();
-            Serial.println(F("BLDC test firmware ready - press Enter to start"));
+            Serial.println(F(BOARD_MODEL " test firmware ready - press Enter to start"));
         }
     }
     while (Serial.available()) Serial.read();   // swallow the keypress(es)

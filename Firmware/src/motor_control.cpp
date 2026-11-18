@@ -5,15 +5,16 @@
 #include <IWatchdog.h>
 #include <cmath>
 
-#include "encoders/as5048a/MagneticSensorAS5048A.h"
 #include "drivers/drv8316/drv8316.h"
 
-#include "pins.h"
+#include "board_config.h"
+#include "hw/encoder.h"
+#include "hw/current_sense.h"
+#include "hw/drv8316_setup.h"
+#include "hw/supply.h"
 #include "can_protocol.h"
 #include "can_bus.h"
 #include "motor_config.h"
-#include "supply_voltage.h"
-#include "supply_monitor.h"
 #include "board_settings.h"
 
 static SPIClass SPI_1(SPI1_MOSI, SPI1_MISO, SPI1_SCK);
@@ -26,13 +27,10 @@ BLDCMotor motor = BLDCMotor(MOTOR_POLE_PAIRS);
 //  - phB_h, phC_l - C phase pwm pin high/low pair
 static DRV8316Driver6PWM driver = DRV8316Driver6PWM(PHA_H, PHA_L, PHB_H, PHB_L, PHC_H, PHC_L, DRV_CS, false);
 
-// 600 mV/A matches the DRV8316 CSA gain register code used in setupFOC()
-// (Gain_0V25). The DRV8316 datasheet's gain table had an erratum: the real
-// gains for codes 0..3 are 0.15 / 0.3 / 0.6 / 1.2 V/A, so the SimpleFOCDrivers
-// enum name (0V25) is misleading - code 0b10 is 0.6 V/A. See motor_test.cpp.
-static LowsideCurrentSense current_sense = LowsideCurrentSense(600.0, SO_A, SO_B, SO_C);
+// Current sense and encoder: the parts the board header selects (src/parts/).
+static CurrentSense &current_sense = boardCurrentSense();
 
-static MagneticSensorAS5048A sensor(ENC_CS, false, SPISettings(5'000'000, MSBFIRST, SPI_MODE1));
+static Sensor &sensor = boardEncoder();
 
 // Commanded current (A, already direction-corrected). Only written through
 // setTargetCurrent() and the command timeout.
@@ -116,43 +114,23 @@ static void printDRV8316Status() {
 
 void setupFOC() {
     // initialise magnetic sensor hardware
-    sensor.init(&SPI_1);
+    encoderInit(&SPI_1);
     // link the motor to the sensor
     motor.linkSensor(&sensor);
 
     // Measure the real supply so SimpleFOC's volts -> PWM duty conversion is
-    // correct. Must happen before current_sense.init() (see supply_voltage.h).
+    // correct. Must happen before current_sense.init() (see hw/supply.h).
     supply_voltage = measuredSupplyVoltageOrDefault();
     driver.voltage_power_supply = supply_voltage;
     driver.voltage_limit = min(MOTOR_VOLTAGE_LIMIT, driver.voltage_power_supply);
-    // Live VIN for the CAN heartbeat (analogRead() until the current sense starts).
-    initSupplyMonitor();
 
     driver.init(&SPI_1);
 
     // small delay to allow SPI response
     delay(10);
 
-    // Set the buck output tot 5V
-    driver.setBuckVoltage(VB_5V);
-    // Wait some time for everything to stabilise
-    delay(500);
-
-    // It's advised to have at least 400ns between read and write calls
-    driver.setOCPLevel(Curr_16A);
-    delayMicroseconds(1);
-    driver.setOCPMode(AutoRetry_Fault);
-    delayMicroseconds(1);
-    driver.setOCPRetryTime(Retry500ms);
-    delayMicroseconds(1);
-    driver.setSlew(Slew_200Vus);
-    delayMicroseconds(1);
-    driver.setPWM100Frequency(FREQ_20KHz);
-    delayMicroseconds(1);
-    driver.setCurrentSenseGain(Gain_0V25); // register code 0b10 = 0.6 V/A (datasheet erratum, see current_sense above)
-    delayMicroseconds(1);
-    driver.setPWMMode(PWM6_Mode);
-    delayMicroseconds(1);
+    // Buck, protection, slew, PWM mode, current-sense settings (see hw/drv8316_setup.cpp).
+    configureDRV8316(driver);
 
     Serial.println("Init complete...");
 
@@ -195,16 +173,21 @@ static bool startFOC() {
     // Not running yet: make sure nothing stale gets applied on the first move().
     target_current = 0;
 
+    // Write the DRV8316 registers again. If the board booted on USB power
+    // alone, the DRV8316 had no supply when setupFOC() configured it, so it
+    // would otherwise run with its defaults (buck, over-current, slew).
+    configureDRV8316(driver);
+
     if (!motor.init()) {
         Serial.println("Motor init failed!");
         sendError(ERR_MOTOR_INIT);
         return false;
     }
 
-    // From here on ADC1 belongs to the current sense: the supply monitor
-    // switches to regular conversions (and analogRead() must not be used).
+    // Some supply sensors share the ADC with the current sense and have to
+    // know when it has taken over (see hw/supply.h).
     const bool csOk = current_sense.init();
-    supplyMonitorCurrentSenseStarted();
+    supplyCurrentSenseStarted();
     if (csOk)  Serial.println("Current sense init success!");
     else {
         Serial.println("Current sense init failed!");

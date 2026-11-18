@@ -1,7 +1,10 @@
 #pragma once
 
-// Checks the DFU button (active low) for a press edge and reboots straight
-// into the USB DFU bootloader if pressed. Call once per loop() iteration.
+// DFU button (boards with HAS_DFU_BUTTON; no-ops on the others).
+// initDfuButton(): call once from setup(). checkDfuButton(): checks the button
+// (active low) for a press edge and reboots straight into the USB DFU
+// bootloader if pressed. Call once per loop() iteration.
+void initDfuButton();
 void checkDfuButton();
 
 // Reboots straight into the STM32 system memory (USB DFU) bootloader, e.g. so a

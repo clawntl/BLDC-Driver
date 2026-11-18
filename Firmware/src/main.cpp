@@ -6,13 +6,13 @@
 
 #include "utilities/stm32math/STM32G4CORDICTrigFunctions.h"
 
-#include "pins.h"
+#include "board_config.h"
 #include "motor_config.h"
 #include "board_settings.h"
 #include "can_bus.h"
 #include "can_protocol.h"
 #include "motor_control.h"
-#include "supply_monitor.h"
+#include "hw/supply.h"
 #include "serial_console.h"
 #include "dfu.h"
 
@@ -48,10 +48,12 @@ void setup() {
     const uint32_t waitStart = millis();
     while (!Serial && millis() - waitStart < BOOT_SERIAL_WAIT_MS) { }
     Serial.println("begin");
+    Serial.print("Board: ");
+    Serial.println(BOARD_MODEL);
 
     // Both devices share SPI1: drive both CS lines high (deselected) before
     // any SPI traffic, otherwise pinMode(OUTPUT) leaves them low and the
-    // DRV8316 and AS5048A both drive MISO during sensor.init().
+    // DRV8316 and the encoder both drive MISO during sensor.init().
     pinMode(DRV_CS, OUTPUT);
     digitalWrite(DRV_CS, HIGH);
     pinMode(ENC_CS, OUTPUT);
@@ -63,12 +65,11 @@ void setup() {
 
     pinMode(LED_BUILTIN, OUTPUT);
 
+    // CAN transceiver on (HIGH = on on every board so far).
     pinMode(CAN_EN, OUTPUT);
-    digitalWrite(CAN_EN, HIGH); // enable CAN transceiver for now
+    digitalWrite(CAN_EN, HIGH);
 
-    // Idle high, pressed = low. Internal pull-up so the pin can't float (and
-    // randomly reboot into DFU) if there's no external pull-up fitted.
-    pinMode(DFU_BUTTON, INPUT_PULLUP);
+    initDfuButton();
 
     SimpleFOCDebug::enable(&Serial);
 
@@ -93,6 +94,9 @@ void setup() {
     } else {
         printUnconfiguredHelp();
     }
+
+    // Before setupFOC(), which measures the supply voltage.
+    supplyBegin();
 
     setupFOC();
 

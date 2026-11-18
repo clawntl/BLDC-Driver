@@ -1,6 +1,33 @@
-# Hardware guide (v0.2)
+# BLDC-Driver v0.2
 
-The design files are in [`Hardware/`](../Hardware) (KiCad). A PDF of the schematic is at [`schematic_v0.2.pdf`](../schematic_v0.2.pdf).
+BLDC-Driver is a compact brushless motor driver built around an **STM32G431** and a **TI DRV8316** three-phase driver with integrated MOSFETs. It suits gimbal motors and small direct-drive wheels.
+
+An **AS5048A** magnetic encoder sits on a break-away tab. With the tab removed, the board measures **39 mm × 36 mm**.
+
+![BLDC-Driver pinout](../../Images/bldc_driver_v02/pinout.png "Pinout diagram")
+
+| | |
+|---|---|
+| Design files | [`Hardware/bldc_driver_v02/`](../../Hardware/bldc_driver_v02) (KiCad) |
+| Schematic | [`schematic_v0.2.pdf`](../../Hardware/bldc_driver_v02/schematic_v0.2.pdf) |
+| Firmware environments | `bldc_driver_v02`, `bldc_driver_v02_test` |
+| Board config | [`Firmware/boards/bldc_driver_v02/board_config.h`](../../Firmware/boards/bldc_driver_v02/board_config.h) |
+| Reported over CAN | Model "BLDC-Driver v0.2", hardware rev 2, capabilities `CAP_MEASURES_SUPPLY_VOLTAGE` |
+
+## Features
+
+| | |
+|---|---|
+| **MCU** | STM32G431CBU6 (Cortex-M4F, 170 MHz max, run at 160 MHz; CORDIC used for fast trig) |
+| **Power stage** | DRV8316 with integrated FETs: 3 A continuous / 8 A peak, 6-PWM control over SPI |
+| **Supply** | 5–35 V DC. The DRV8316 buck converter generates 5 V, and an XC6206 LDO generates 3.3 V |
+| **Current sense** | DRV8316 integrated low-side current-sense amplifiers on all three phases |
+| **Position sensor** | AS5048A 14-bit magnetic encoder (SPI1) on a break-away tab, or an external sensor via the SPI1 header |
+| **Communication** | CAN via a TJA1051T/3 transceiver (FDCAN capable up to 5 Mbit/s; the firmware uses 1 Mbit/s classic CAN). Two JST-PH connectors allow daisy-chaining |
+| **CAN termination** | Optional split 120 Ω termination, set with two jumpers |
+| **Other I/O** | USB-C (CDC serial console + DFU flashing), SWD header, SPI3 header, user button, user LED, power LED |
+| **Supply sensing** | 100 kΩ / 10 kΩ divider on VIN, read by the MCU (PA3) |
+| **Mounting** | 4 × M2 holes, 33 mm × 30 mm spacing |
 
 ## Block overview
 
@@ -16,7 +43,7 @@ The design files are in [`Hardware/`](../Hardware) (KiCad). A PDF of the schemat
 
 ## Pin mapping
 
-The source of truth is [`Firmware/include/pins.h`](../Firmware/include/pins.h).
+The source of truth is the board config, [`board_config.h`](../../Firmware/boards/bldc_driver_v02/board_config.h).
 
 ### Power stage (DRV8316)
 
@@ -50,7 +77,7 @@ Both SPI1 devices share MISO. The firmware drives **both** chip selects high bef
 | Function | MCU pin | Notes |
 |---|---|---|
 | Supply sense (V_SENS) | PA3 | VIN → 100 kΩ → PA3 → 10 kΩ → GND, so V_PA3 = VIN / 11 |
-| User LED | PC6 | Status LED, see [LED patterns](firmware.md#status-led) |
+| User LED | PC6 | Status LED, see [LED patterns](../firmware.md#status-led) |
 | User button | PB12 | Active low. The firmware uses it to reboot into DFU |
 | Reset | PG10 (NRST) | RST button |
 | SWD | PA13 SWDIO, PA14 SWCLK | 2×2 1.27 mm header (3V3, GND, SWDIO, SWCLK) |
@@ -81,12 +108,12 @@ Both SPI1 devices share MISO. The firmware drives **both** chip selects high bef
 - **Current rating.** The DRV8316 is rated for 8 A peak, but the practical continuous current is about 3 A and depends on cooling. The firmware limits phase current to `MOTOR_CURRENT_LIMIT` (2 A by default).
 - **Over-current protection.** The firmware sets the DRV8316 OCP to 16 A with automatic retry after 500 ms.
 - **Current-sense gain.** The firmware uses 0.6 V/A. The DRV8316 datasheet's original gain table was wrong: register codes 0–3 actually give 0.15 / 0.3 / 0.6 / 1.2 V/A. As a result, the SimpleFOCDrivers enum `Gain_0V25` really selects **0.6 V/A**.
-- **Supply measurement.** VIN is measured once at boot. The ADC uses a long sample time because the divider has a high source impedance and no filter capacitor. If you run the board from USB only, the reading falls outside the 6–30 V sanity window, and the firmware falls back to `MOTOR_VOLTAGE_POWER_SUPPLY` (12 V).
-- **Clock.** The board uses a 16 MHz HSE crystal. The MCU runs at 160 MHz, which requires boost mode. USB runs from HSI48 with CRS. See [`clock_config.cpp`](../Firmware/src/clock_config.cpp).
+- **Supply measurement.** VIN is measured at boot for PWM scaling, and then continuously for the CAN heartbeat. The ADC uses a long sample time because the divider has a high source impedance and no filter capacitor. If you run the board from USB only, the reading falls outside the 6–30 V sanity window, and the firmware falls back to `MOTOR_VOLTAGE_POWER_SUPPLY` (12 V). Trim the reading with `VSENS_CALIBRATION` in the board config.
+- **Clock.** The board uses a 16 MHz HSE crystal. The MCU runs at 160 MHz, which requires boost mode. USB runs from HSI48 with CRS. See [`clock_config.cpp`](../../Firmware/src/clock_config.cpp).
 
 ## Manufacturing
 
-[`Hardware/production/`](../Hardware/production) contains files ready for JLCPCB:
+[`Hardware/bldc_driver_v02/production/`](../../Hardware/bldc_driver_v02/production) contains files ready for JLCPCB:
 
 - `v0.2_Custom_Motor_Driver_DRV8316_STM32G4.zip`: Gerbers and drill files
 - `bom.csv`: bill of materials with LCSC part numbers

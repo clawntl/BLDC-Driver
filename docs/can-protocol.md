@@ -1,6 +1,20 @@
 # CAN protocol
 
-The definitions live in [`Firmware/include/can_protocol.h`](../Firmware/include/can_protocol.h).
+The definitions live in [`Firmware/include/can_protocol.h`](../Firmware/include/can_protocol.h). To try the protocol from a PC, use the [CAN test tools](can-tools.md).
+
+## Protocol versions
+
+The protocol version is reported by `CMD_GET_INFO`, separately from the firmware version:
+
+| Protocol | Firmware | Adds |
+|---|---|---|
+| 1 | 1.0 | Start FOC, current commands, velocity telemetry, status heartbeat, errors. Left/right boards |
+| 2 | 1.1 | Configuration over CAN (`CMD_GET_INFO` … `CMD_REBOOT`); the supply voltage in the heartbeat |
+| 3 | 1.2 | Node IDs 1–15 instead of left/right (the IDs below) |
+| 4 | 1.3 | `CMD_GET_BOARD_INFO` (model name, capabilities); input current in the heartbeat on boards with `CAP_MEASURES_INPUT_CURRENT` |
+
+## Basics
+
 
 - **Bus:** classic CAN 2.0, standard 11-bit IDs, **1 Mbit/s**, 87.5 % sample point (no FD or bit-rate switching).
 - **Floats:** IEEE-754 single precision, **big-endian** (most significant byte first).
@@ -60,6 +74,7 @@ These are sent on the board's command ID (`0x021` or `0x022`). The reply comes b
 | `0x24` | `CMD_SAVE` | `[0x24]` | `[0x24][status]`, then (if OK) the board stops the motor, writes flash and reboots |
 | `0x25` | `CMD_REVERT` | `[0x25]` | `[0x25][status]`: unsaved changes discarded |
 | `0x26` | `CMD_REBOOT` | `[0x26]` | `[0x26][status]`, then the board resets (the motor stops) |
+| `0x27` | `CMD_GET_BOARD_INFO` (protocol 4) | `[0x27][page]` | see [Board description](#board-description-cmd_get_board_info-protocol-4) |
 | | any other | | `[0xFE][command][1]` (`CMD_NACK`: not understood) |
 
 **Parameters (`CMD_SET_PARAM`):**
@@ -97,11 +112,11 @@ All frames are sent on the board's telemetry ID.
 | CMD | Name | Payload | When |
 |---|---|---|---|
 | `0x02` | `CMD_SHAFT_VELOCITY` | float rad/s (sign follows the invert setting) | Every 10 ms while FOC runs (`PARAM_VELOCITY_INTERVAL_MS` changes this) |
-| `0x03` | `CMD_DRIVER_STATUS` | `[state][flags][supply mV, 2 bytes]` | Every 100 ms, in every state |
+| `0x03` | `CMD_DRIVER_STATUS` | `[state][flags][supply mV, 2 bytes]`, then `[input mA, 2 bytes]` on boards with `CAP_MEASURES_INPUT_CURRENT` | Every 100 ms, in every state |
 | `0x10` | `CMD_START_FOC` | float `1.0` = started, `0.0` = failed | After each start request |
 | `0xFF` | `CMD_ERROR` | float error code | On an error |
 
-These frames are 5 bytes long: one command byte plus four payload bytes. Configuration replies (see above) are also sent on the telemetry ID.
+These frames are 5 bytes long (one command byte plus four payload bytes), except the status frame of a board with `CAP_MEASURES_INPUT_CURRENT`, which is 7 bytes. Configuration replies (see above) are also sent on the telemetry ID.
 
 ### Driver state (status byte 1)
 
@@ -114,9 +129,34 @@ These frames are 5 bytes long: one command byte plus four payload bytes. Configu
 
 ### Supply voltage (status bytes 3–4)
 
-The driver's supply (battery) voltage in millivolts, as an unsigned 16-bit big-endian integer, low-pass filtered with a time constant of about 200 ms. `0` means there is no reading yet; firmware from before this field was added always sends `0`. Both drivers on a robot normally share one battery, so the host can average the two readings.
+The driver's supply (battery) voltage in millivolts, as an unsigned 16-bit big-endian integer. `0` means there is no reading yet; firmware from before this field was added always sends `0`. Both drivers on a robot normally share one battery, so the host can average the two readings.
 
-The voltage is measured through the V_SENS divider. Before FOC starts it is read with `analogRead()`; once the current sense is running it is read with regular ADC1 conversions alongside the current-sense injected conversions (see `src/supply_monitor.h`). Its accuracy depends on `VSENS_CALIBRATION` (see the [firmware guide](firmware.md#configuration-firmwareincludemotor_configh)).
+How it's measured depends on the board's supply sensor (see the [firmware guide](firmware.md#boards)). BLDC-Driver uses the V_SENS divider, low-pass filtered with a time constant of about 200 ms; its accuracy depends on `VSENS_CALIBRATION` in the board header. MiniFOC uses an INA226, read every 100 ms.
+
+### Input current (status bytes 5–6, `CAP_MEASURES_INPUT_CURRENT` only)
+
+The current the board draws from its supply in milliamps, as a signed 16-bit big-endian integer. It is positive when the board is drawing current and negative when the motor regenerates into the supply. `-32768` (`0x8000`) means there is no reading. Boards without `CAP_MEASURES_INPUT_CURRENT` send a 5-byte status frame without these bytes.
+
+### Board description (`CMD_GET_BOARD_INFO`, protocol 4)
+
+With this command a host can show and use any board without keeping its own list of boards. Send `[0x27][page]` to the board's command ID:
+
+| Page | Reply |
+|---|---|
+| 0 | `[0x27][0][capabilities, uint32 big-endian][hardware rev][0]` |
+| 1–5 | `[0x27][page][6 characters of the model name]`: characters 0–5, 6–11 and so on, NUL-padded after the end |
+| other | `[0xFE][0x27][2]` (bad value) |
+
+To read the model name, request pages 1, 2, … and stop at the first page that contains a NUL. A name is at most 30 characters.
+
+Capability bits:
+
+| Bit | Name | Meaning |
+|---|---|---|
+| 0 | `CAP_MEASURES_SUPPLY_VOLTAGE` | The heartbeat supply voltage is a measurement |
+| 1 | `CAP_MEASURES_INPUT_CURRENT` | The heartbeat carries the input current (bytes 5–6) |
+
+New bits are added when a board gains something a host can use. A host should ignore bits it doesn't know. It should decide what to expect from the capability bits, never from the model name. Firmware before protocol 4 answers `CMD_GET_BOARD_INFO` with a NACK.
 
 ### Status flags (status byte 2)
 

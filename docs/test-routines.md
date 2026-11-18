@@ -5,9 +5,17 @@ A step-by-step procedure for testing a BLDC-Driver board together with its motor
 Work through the steps **in order**. Each one relies on the ones before it, so if a step fails, fix it before you move on. You can copy the [record sheet](#record-sheet) at the end and fill it in for each board.
 
 > [!NOTE]
-> **Reference values.** The expected readings come from a v0.2 board running a 12 V supply with an 11-pole-pair gimbal-style motor (5.3 Ω between motor wires) and the on-board AS5048A. Values that depend on the motor are marked, and [Appendix A](#appendix-a-choosing-test-voltages) explains how to adapt them to a different motor. Readings that depend only on the board, such as current-sense offsets and DRV8316 flags, should match on any board.
+> **Reference values.** The expected readings come from a v0.2 board running a 12 V supply with an 11-pole-pair gimbal-style motor (5.3 Ω between motor wires) and the on-board AS5048A. Values that depend on the motor are marked, and [Appendix A](#appendix-a-choosing-test-voltages) explains how to adapt them to a different motor. Readings that depend only on the board, such as current-sense offsets and DRV8316 flags, should match on any BLDC-Driver v0.2.
+>
+> **MiniFOC Mk2** works the same way, with a few differences:
+> - The encoder is an AS5047P. Its flags read the same in `s`.
+> - Current-sense offsets also sit near 1.65 V, but they come from the INA241A3 reference, not the DRV8316's VREF. Its SOx pins are PA2/PA1/PA0, and the DRV8316 SOx checks don't apply.
+> - `vin` also shows the input current, and works after `cs` too.
+> - There is no USER button for DFU.
+>
+> See the [MiniFOC Mk2 page](boards/minifoc_mk2.md).
 
-For building, flashing and configuring the `driver` firmware, see the [Firmware guide](firmware.md). For pins, connectors and buttons, see the [Hardware guide](hardware.md).
+For building, flashing and configuring the `driver` firmware, see the [Firmware guide](firmware.md). Here `motor_test` means your board's `_test` environment (`bldc_driver_v02_test`, or `minifoc_mk2_test` on a MiniFOC) and `driver` its firmware environment (`bldc_driver_v02` / `minifoc_mk2`). For pins, connectors and buttons, see your board's page: [BLDC-Driver v0.2](boards/bldc_driver_v02.md) or [MiniFOC Mk2](boards/minifoc_mk2.md).
 
 ---
 
@@ -63,13 +71,13 @@ Once the readings are good, reconnect the motor.
    - **Blank or unresponsive board:** hold **BOOT**, tap **RST**, then release **BOOT**.
 3. From the `Firmware/` directory, run:
    ```bash
-   pio run -e motor_test -t upload
+   pio run -e bldc_driver_v02_test -t upload
    ```
 4. Open the serial monitor at **115200** baud:
    ```bash
-   pio device monitor -e motor_test
+   pio device monitor -e bldc_driver_v02_test
    ```
-5. The monitor shows `BLDC test firmware ready - press Enter to start` every 2 s. **Press Enter.**
+5. The monitor shows `BLDC-Driver v0.2 test firmware ready - press Enter to start` (or `MiniFOC Mk2 ...`) every 2 s. **Press Enter.**
 
 | If… | Likely cause |
 |---|---|
@@ -112,7 +120,7 @@ Type `s`.
 | Expected with **no magnet** |
 |---|
 | `parityErr=0 cmdInvalid=0 framingErr=0` |
-| `compHigh=1`, `AGC=255`, a small `magnitude` (below ~100). `OCF` may read 0 |
+| `fieldWeak=1`, `AGC=255`, a small `magnitude` (below ~100). `offsetReady` may read 0 |
 | Warning lines saying the field is too weak |
 
 | If… | Likely cause |
@@ -131,7 +139,7 @@ Type `s`.
 
 | Expected | Notes |
 |---|---|
-| `OCF=1 COF=0 compLow=0 compHigh=0` | The field is in range |
+| `offsetReady=1 COF=0 fieldWeak=0 fieldStrong=0` | The field is in range |
 | `AGC` somewhere between ~**20 and ~200** | Reference: 50–53. The line ends `OK: field in range, AGC has headroom both ways` |
 | `magnitude` ≈ 4500–4800 | |
 
@@ -143,8 +151,8 @@ Type `s`.
 
 | If… | Likely cause |
 |---|---|
-| `compHigh=1`, or AGC at or near 255 | The field is too **weak**: the gap is too large, the magnet is too small, or it isn't diametrically magnetised (see below) |
-| `compLow=1`, or AGC at or near 0 | The field is too **strong**: the magnet is too close, so increase the gap |
+| `fieldWeak=1`, or AGC at or near 255 | The field is too **weak**: the gap is too large, the magnet is too small, or it isn't diametrically magnetised (see below) |
+| `fieldStrong=1`, or AGC at or near 0 | The field is too **strong**: the magnet is too close, so increase the gap |
 | AGC rises and falls once per turn (e.g. between 45 and 80) | The magnet is **off-centre or tilted**, or the shaft wobbles. Reseat the magnet |
 | The angle barely changes as you turn the shaft | The magnet is **axially** magnetised, with its poles on the flat faces. It must be **diametric**, with the poles on the curved sides. To test: an axial disc snaps flat onto steel, while a diametric one prefers to sit on its edge |
 
@@ -197,7 +205,7 @@ Type `drv`. This configures the DRV8316 and **enables the power stage** at 0 V, 
 | Any `OC_*` = 1 | Overcurrent tripped: a shorted motor wire, a motor phase shorted to its frame, or a damaged output stage |
 | `overTemp=1` | The driver is overheating. Check the cooling and look for a short |
 | `voltage_power_supply` ≈ 12.00, with a warning | The VIN measurement failed or was out of range. Go back to step 3 |
-| A timer other than TIM1 is chosen | The pin mapping in `Firmware/include/pins.h` is wrong |
+| A timer other than TIM1 is chosen | The pin mapping in the board's `board_config.h` (`Firmware/boards/<board>/`) is wrong |
 
 ---
 
@@ -319,7 +327,7 @@ Open loop drives the motor **without using the encoder**. It checks the DRV8316,
 | `PP check: fail` | The pole-pair count is wrong, or the encoder isn't reading the rotor (a loose magnet or a marginal field) |
 | `sensor_direction` changes between runs | The magnet is slipping, or the alignment voltage is too low to move the rotor reliably. Raise `v`: alignment uses 2 × v, up to a maximum of 3 V |
 | `zero_electric_angle` varies by more than 0.1 rad | The magnet is loose or slipping, the field is marginal, or friction is stopping the rotor from settling. Recheck step 5 |
-| `MOT:Success: 2`, `3` or `4` | The current-sense channels didn't match the phases (2 = channels swapped, 3 = a sign inverted, 4 = both). SimpleFOC corrected this for the current session, but check the wiring and `pins.h` |
+| `MOT:Success: 2`, `3` or `4` | The current-sense channels didn't match the phases (2 = channels swapped, 3 = a sign inverted, 4 = both). SimpleFOC corrected this for the current session, but check the wiring and the `SO_A/B/C` pins in `board_config.h` |
 | `MOT:Success: 0`, or `Align error!` | A current-sense channel isn't seeing any current. Go back to step 8 |
 | `success=0` | Read the `MOT:` lines above it to see which stage failed |
 | With nothing changed, the zero angle differs from an earlier session by more than ~0.3 rad | The magnet is creeping on the shaft. Glue it (step 5.6) |
@@ -358,7 +366,7 @@ Open loop drives the motor **without using the encoder**. It checks the DRV8316,
 
 1. Type `dfu`, then flash the `driver` firmware from the `Firmware/` directory:
    ```bash
-   pio run -e driver -t upload
+   pio run -e bldc_driver_v02 -t upload
    ```
 2. If this is a new board, configure it as described in [Firmware guide: First-time setup](firmware.md#first-time-setup). Use your note from step 9.4 to choose the `invert` setting.
 3. Fill in the record sheet and keep it with the board.
@@ -411,7 +419,7 @@ The current-sense range is about ±2.75 A, so keep test currents well under 2 A.
 
 - **AGC:** the AS5048A adjusts its own gain (AGC, 0–255) to suit the magnet's field. A value near 255 means it's working as hard as it can, because the field is weak. A value near 0 means the field is very strong. A mid-range value that barely changes around a turn means a good, centred magnet.
 - **Why `t 0.5` stalls:** SimpleFOC's default dead time of 2% costs about 0.24 V per phase at 12 V, which leaves very little torque from a 0.5 V command. The `driver` firmware uses **current** control, which corrects for this automatically.
-- **Current-sense gain:** the DRV8316 register code used here (`Gain_0V25` in SimpleFOCDrivers) actually selects **0.6 V/A**. See the [Hardware guide](hardware.md#electrical-notes). The `hold` test confirms the scaling.
+- **Current-sense gain:** the DRV8316 register code used here (`Gain_0V25` in SimpleFOCDrivers) actually selects **0.6 V/A**. See the [BLDC-Driver v0.2 page](boards/bldc_driver_v02.md#electrical-notes). The `hold` test confirms the scaling.
 - **Zero electrical angle:** where the magnet sits relative to the motor's magnetic poles. It's fixed by how the magnet was fitted, so it only changes if the magnet moves. That's why a stored alignment must be cleared whenever the magnet, encoder or motor is refitted.
 - **Open loop vs `driver` direction:** both turn the motor in the direction the electrical angle increases, so a positive `ol` and a positive current command in `driver` turn the motor the same way. `set invert on` in `driver` reverses the sign of both the commands and the reported velocity.
 
@@ -424,7 +432,7 @@ Board ID: ______________   Motor: ______________   Date: __________   Tester: __
 
 1  Motor resistance   A–B ____ Ω   B–C ____ Ω   A–C ____ Ω                              [ ] OK
 3  VIN                reported ____ V   meter ____ V                                     [ ] OK
-4  s (no magnet)      compHigh=1, no SPI errors                                          [ ] OK
+4  s (no magnet)      fieldWeak=1, no SPI errors                                          [ ] OK
 5  s (magnet)         AGC at 8 positions: ___ ___ ___ ___ ___ ___ ___ ___                 [ ] OK
    n                  spread ____ counts   glitches ____                                 [ ] OK
    w                  ~6.28/turn, no glitches                                            [ ] OK

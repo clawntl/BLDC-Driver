@@ -4,17 +4,14 @@
 // the rotor). See the motor's datasheet or count magnets and divide by 2.
 #define MOTOR_POLE_PAIRS 11
 
+// Motor and control settings. Board hardware (pins, sensors, current sense,
+// supply sensing) is in boards/<name>/board_config.h, see docs/firmware.md#boards.
+
 // Supply voltage feeding the DRV8316, in Volts. Used only as a FALLBACK: the
-// actual value is measured at startup through the V_SENS divider (see
-// supply_voltage.h) and used if it falls within the sanity range below.
+// actual value is measured at startup by the board's supply sensor (see
+// hw/supply.h) and used if it falls within the sanity range below.
 #define MOTOR_VOLTAGE_POWER_SUPPLY 12.0f
 
-// V_SENS divider: VIN -> 100k -> PA3 -> 10k -> GND, ratio (100k+10k)/10k.
-#define VSENS_DIVIDER_RATIO 11.0f
-// ADC reference = VDDA = 3.3 V LDO (XC6206, +-2%).
-#define VSENS_ADC_REF_V     3.3f
-// Trim factor: set to (multimeter VIN) / (reported VIN) after a bench check.
-#define VSENS_CALIBRATION   1.0f
 // A measured VIN outside this range is treated as a bad reading (e.g. board
 // powered from USB only) and MOTOR_VOLTAGE_POWER_SUPPLY is used instead.
 // DRV8316 operating range is 4.5-35 V.
@@ -39,14 +36,8 @@
 #define COMMAND_TIMEOUT_MS 100
 
 // How often the CMD_DRIVER_STATUS heartbeat is sent over CAN, in milliseconds.
-// It also carries the live supply voltage (see supply_monitor.h).
+// It also carries the live supply voltage (see hw/supply.h).
 #define CAN_STATUS_INTERVAL_MS 100
-
-// Live supply voltage: sample interval and low-pass filter time constant, in
-// milliseconds. Each sample is one ADC conversion (~7 us), so this costs
-// nothing noticeable in the FOC loop.
-#define SUPPLY_SAMPLE_INTERVAL_MS 10
-#define SUPPLY_FILTER_TAU_MS      200
 
 // How often the DRV8316 fault status is polled over SPI while FOC runs.
 #define DRV_STATUS_POLL_INTERVAL_MS 500
