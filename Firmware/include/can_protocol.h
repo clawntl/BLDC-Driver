@@ -26,12 +26,14 @@
 // status only (no CMD_GET_INFO reply); 2 = adds the configuration commands;
 // 3 = node IDs instead of left/right (new current frame and telemetry IDs);
 // 4 = CMD_GET_BOARD_INFO (model name + capabilities) and input current in
-//     the heartbeat (CAP_MEASURES_INPUT_CURRENT).
-#define CAN_PROTOCOL_VERSION 4
+//     the heartbeat (CAP_MEASURES_INPUT_CURRENT);
+// 5 = CMD_GET_PARAM, current loop parameters (PARAM_CURRENT_*) and the FOC
+//     loop rate (PARAM_FOC_LOOP_HZ).
+#define CAN_PROTOCOL_VERSION 5
 
 // Firmware version, reported by CMD_GET_INFO and the serial `config` command.
 #define FIRMWARE_VERSION_MAJOR 1
-#define FIRMWARE_VERSION_MINOR 3
+#define FIRMWARE_VERSION_MINOR 4
 #define FIRMWARE_VERSION_PATCH 0
 
 #define CAN_BIT_RATE     1'000'000 // 1 Mbit/s classic CAN 2.0B (no FD / bit rate switch used)
@@ -70,7 +72,10 @@ enum CAN_CMD : uint8_t {
     // [0x22][PARAM_*][float value] -> [0x22][param][status][float value now]
     // Saved parameters (node ID, invert) change the PENDING settings: they take
     // effect after CMD_SAVE (which reboots). Runtime parameters apply at once
-    // and are back to their defaults after a reset.
+    // and are back to their defaults after a reset. Tuning parameters (the
+    // current loop) do both: they apply at once AND change the pending
+    // settings, so CMD_SAVE keeps them and CMD_REVERT goes back to the saved
+    // values.
     CMD_SET_PARAM = 0x22,
 
     // [0x23][CAL_STORE | CAL_CLEAR] -> [0x23][op][status]
@@ -99,6 +104,11 @@ enum CAN_CMD : uint8_t {
     // Firmware before protocol 4 NACKs it ([0xFE][0x27][CONFIG_ERR_UNKNOWN]).
     CMD_GET_BOARD_INFO = 0x27,
 
+    // Read one parameter (protocol 5): [0x28][PARAM_*] ->
+    // [0x28][param][status][float value]. Saved parameters read the PENDING
+    // value; runtime and tuning parameters the value in use.
+    CMD_GET_PARAM = 0x28,
+
     // Driver -> host: [0xFE][command byte][CONFIG_ERR_UNKNOWN]: command not
     // understood (e.g. a newer host talking to this firmware).
     CMD_NACK = 0xFE,
@@ -112,6 +122,12 @@ enum ConfigParam : uint8_t {
     PARAM_NODE_ID = 1,   // saved: 1-15 (the board's CAN IDs change after the reboot!)
     PARAM_INVERT = 2,    // saved: 0 / 1
     PARAM_VELOCITY_INTERVAL_MS = 0x10, // runtime: CMD_SHAFT_VELOCITY period, 1-100 ms (default 10)
+    // Tuning (protocol 5): apply at once and are kept by CMD_SAVE.
+    PARAM_CURRENT_P  = 0x20, // current loop P, V/A, 0-50 (default 3)
+    PARAM_CURRENT_I  = 0x21, // current loop I, V/(A s), 0-100000 (default 300)
+    PARAM_CURRENT_TF = 0x22, // current measurement filter time constant, s, 0-0.01 (default 0.00053)
+    // Read-only (CMD_GET_PARAM; CMD_SET_PARAM answers CONFIG_ERR_UNKNOWN).
+    PARAM_FOC_LOOP_HZ = 0x30, // FOC loop rate while running, Hz (0 = not running)
 };
 
 enum CalibrationOp : uint8_t {

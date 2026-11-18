@@ -24,6 +24,22 @@
 // Motor phase current limit, in Amps.
 #define MOTOR_CURRENT_LIMIT 2.0f
 
+// Current (torque) loop: the q and d axis PI controllers and the filter on
+// the measured currents. These are the defaults; each board keeps its own
+// values in its settings (`set curp/curi/curtf` over USB, PARAM_CURRENT_* over
+// CAN) and they can be changed while the motor runs. The defaults are
+// SimpleFOC's own, which suit a low-resistance motor: on a 5.6 ohm gimbal
+// motor (GM3506) the loop then follows a step in about 30 ms and lags behind
+// back-EMF when the wheel speeds up. Raising I speeds it up (closed-loop time
+// constant roughly (R + P) / I); see docs/firmware.md#current-loop.
+#define CURRENT_LOOP_P_DEFAULT   3.0f      // V per A
+#define CURRENT_LOOP_I_DEFAULT   300.0f    // V per A per s
+#define CURRENT_LOOP_TF_DEFAULT  0.00053f  // s, = 1 / (2 pi 300 Hz)
+// Accepted ranges.
+#define CURRENT_LOOP_P_MAX       50.0f
+#define CURRENT_LOOP_I_MAX       100000.0f
+#define CURRENT_LOOP_TF_MAX      0.01f
+
 // Voltage applied during sensor alignment at startup, in Volts.
 #define MOTOR_VOLTAGE_SENSOR_ALIGN 3.0f
 

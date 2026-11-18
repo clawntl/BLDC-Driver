@@ -12,6 +12,7 @@ The protocol version is reported by `CMD_GET_INFO`, separately from the firmware
 | 2 | 1.1 | Configuration over CAN (`CMD_GET_INFO` … `CMD_REBOOT`); the supply voltage in the heartbeat |
 | 3 | 1.2 | Node IDs 1–15 instead of left/right (the IDs below) |
 | 4 | 1.3 | `CMD_GET_BOARD_INFO` (model name, capabilities); input current in the heartbeat on boards with `CAP_MEASURES_INPUT_CURRENT` |
+| 5 | 1.4 | `CMD_GET_PARAM`; current loop tuning (`PARAM_CURRENT_P/I/TF`) and the FOC loop rate (`PARAM_FOC_LOOP_HZ`) |
 
 ## Basics
 
@@ -75,15 +76,22 @@ These are sent on the board's command ID (`0x021` or `0x022`). The reply comes b
 | `0x25` | `CMD_REVERT` | `[0x25]` | `[0x25][status]`: unsaved changes discarded |
 | `0x26` | `CMD_REBOOT` | `[0x26]` | `[0x26][status]`, then the board resets (the motor stops) |
 | `0x27` | `CMD_GET_BOARD_INFO` (protocol 4) | `[0x27][page]` | see [Board description](#board-description-cmd_get_board_info-protocol-4) |
+| `0x28` | `CMD_GET_PARAM` (protocol 5) | `[0x28][param]` | `[0x28][param][status][float value]`: saved parameters read the pending value, the others the value in use |
 | | any other | | `[0xFE][command][1]` (`CMD_NACK`: not understood) |
 
-**Parameters (`CMD_SET_PARAM`):**
+**Parameters (`CMD_SET_PARAM`, `CMD_GET_PARAM`):**
 
 | ID | Name | Values | Kind |
 |---|---|---|---|
 | 1 | `PARAM_NODE_ID` | 1–15 | Saved. **The board's CAN IDs change after the reboot.** Don't give two boards the same ID: they can then no longer be told apart (fix it over USB with `set node`) |
 | 2 | `PARAM_INVERT` | 0 / 1 | Saved |
 | `0x10` | `PARAM_VELOCITY_INTERVAL_MS` | 1–100 (default 10) | Runtime: applies at once and goes back to the default after a reset |
+| `0x20` | `PARAM_CURRENT_P` | 0–50 V/A (default 3) | Tuning (protocol 5): current loop P, both axes |
+| `0x21` | `PARAM_CURRENT_I` | 0–100 000 V/(A·s) (default 300) | Tuning: current loop I, both axes |
+| `0x22` | `PARAM_CURRENT_TF` | 0–0.01 s (default 0.00053) | Tuning: time constant of the filter on the measured currents |
+| `0x30` | `PARAM_FOC_LOOP_HZ` | read only | FOC loop rate while running, Hz (0 = not running). `CMD_SET_PARAM` answers status 1 |
+
+**Tuning** parameters apply at once (also while the motor runs) **and** change the pending settings: `CMD_SAVE` keeps them, `CMD_REVERT` goes back to the saved values. See [Current loop](firmware.md#current-loop).
 
 Saved parameters and `CMD_CALIBRATION` change the **pending** settings, exactly like the serial console's `set` and `cal`. They take effect after `CMD_SAVE`. `CMD_CALIBRATION` store needs FOC to be running (it keeps this boot's alignment); clear makes the next start run the sensor alignment.
 

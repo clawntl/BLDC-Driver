@@ -81,6 +81,11 @@ The console runs at 115200 baud. Lines end in LF or CR, and commands are case-in
 | `set node 1-15` | Set the board's CAN node ID (sets its CAN IDs) |
 | `set side left\|right` | Shorthand for node 1 / node 2 |
 | `set invert on\|off` | Flip the sign of commanded current and reported velocity |
+| `set curp <V/A>` | Current loop P (default 3). Applies at once |
+| `set curi <V/(A·s)>` | Current loop I (default 300). Applies at once |
+| `set curtf <ms>` | Current filter time constant, in ms (default 0.53). Applies at once |
+| `cur` | Show the current loop in use and the FOC loop rate |
+| `cur defaults` | Current loop back to the defaults (applies at once) |
 | `cal store` | Keep this boot's FOC alignment (FOC must already be running) |
 | `cal clear` | Forget the stored alignment |
 | `save` | Stop the motor, write settings to flash, verify and reboot |
@@ -89,7 +94,13 @@ The console runs at 115200 baud. Lines end in LF or CR, and commands are case-in
 | `reboot` | Reset the MCU |
 | `dfu` | Reboot into the USB DFU bootloader |
 
-`set` and `cal` only change the **pending** settings. Nothing takes effect until `save`.
+`set` and `cal` only change the **pending** settings. Nothing takes effect until `save`, except the current loop (`set curp/curi/curtf`, `cur defaults`), which also applies at once so it can be tuned on a running motor; `save` keeps it and `revert` goes back to the saved values. The same parameters can be set over CAN (`PARAM_CURRENT_*`, see the [CAN protocol](can-protocol.md)).
+
+### Current loop
+
+The board runs SimpleFOC's FOC current control: a PI controller per axis turns the error between the commanded and the measured current into a voltage. Its defaults (P = 3 V/A, I = 300 V/(A·s), filter 0.53 ms) suit low-resistance motors. On a higher-resistance gimbal motor the loop is slow: with R = 5.6 Ω (GM3506) the actual current follows a step in the command with a time constant of roughly (R + P) / I ≈ 30 ms, and it falls behind whenever the motor speeds up, because the back-EMF rises faster than the integral can follow. A balancing robot sees that as torque lag.
+
+Raising **I** speeds the loop up roughly in proportion; that's the main knob. **P** adds a direct response, but too much for the motor's inductance and the FOC loop rate makes it ring. A starting point for a 5–6 Ω motor is P = 3 and I = 1500–3000 (about 3–6 ms). Check the FOC loop rate with `cur`: keep the loop's response well below it (I / (R + P) under about a tenth of the loop rate in rad/s). Settings saved by firmware 1.0–1.3 are kept when updating; the current loop then starts at the defaults.
 
 ## Runtime behaviour
 

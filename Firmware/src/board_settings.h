@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "motor_config.h" // CURRENT_LOOP_*_DEFAULT
+
 // Per-board settings kept in flash, so a single firmware image can be flashed
 // to both motor drivers and then configured over USB serial (see
 // serial_console.h for the commands).
@@ -30,7 +32,19 @@ struct BoardSettings {
     bool    calibrationValid  = false;
     int8_t  sensorDirection   = 0;     // SimpleFOC Direction: CW = 1, CCW = -1
     float   zeroElectricAngle = 0.0f;  // rad, [0, 2*pi)
+
+    // Current loop tuning (settings layout 2, firmware 1.4). Unlike the
+    // fields above these also apply at once when changed (see
+    // applyCurrentLoopSettings() in motor_control.h); saving keeps them.
+    float currentP  = CURRENT_LOOP_P_DEFAULT;   // V/A
+    float currentI  = CURRENT_LOOP_I_DEFAULT;   // V/(A s)
+    float currentTf = CURRENT_LOOP_TF_DEFAULT;  // s
 };
+
+// Range checks for the current loop values (see CURRENT_LOOP_*_MAX).
+bool validCurrentP(float v);
+bool validCurrentI(float v);
+bool validCurrentTf(float v);
 
 // Settings the firmware is running with (loaded once at boot, never changed
 // at runtime - CAN filters etc. are configured from these).
@@ -42,7 +56,8 @@ BoardSettings &pendingSettings();
 
 // Reads flash into both copies. Returns false (and leaves defaults, i.e.
 // "unconfigured") if the page is blank, corrupt or from an incompatible
-// layout version.
+// layout version. Settings saved by firmware 1.0-1.3 (layout 1) are read
+// too, with the current loop at its defaults.
 bool loadBoardSettings();
 
 // Writes pendingSettings() to flash and reads it back to verify. Stalls the

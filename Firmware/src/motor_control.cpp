@@ -158,6 +158,7 @@ void setupFOC() {
     // initFOC() can skip the sensor alignment. See board_settings.h.
     const BoardSettings &cfg = activeSettings();
     direction_sign = cfg.invertDirection ? -1.0f : 1.0f;
+    applyCurrentLoopSettings(cfg);
     if (cfg.calibrationValid) {
         motor.sensor_direction    = static_cast<Direction>(cfg.sensorDirection);
         motor.zero_electric_angle = cfg.zeroElectricAngle;
@@ -204,6 +205,10 @@ static bool startFOC() {
         sendError(ERR_FOC_INIT);
         return false;
     }
+
+    // Again, in case init changed them; the pending values, so a change made
+    // before this start (and not saved) still applies.
+    applyCurrentLoopSettings(pendingSettings());
 
     Serial.println(F("Motor ready."));
     return true;
@@ -304,6 +309,26 @@ void stopMotor() {
 }
 
 bool focRunning() { return foc_running; }
+
+void applyCurrentLoopSettings(const BoardSettings &s) {
+    // Both axes alike. Changing P/I while running is safe: SimpleFOC's PID
+    // keeps its integral in volts, so the output doesn't jump.
+    motor.PID_current_q.P = s.currentP;
+    motor.PID_current_q.I = s.currentI;
+    motor.PID_current_d.P = s.currentP;
+    motor.PID_current_d.I = s.currentI;
+    motor.LPF_current_q.Tf = s.currentTf;
+    motor.LPF_current_d.Tf = s.currentTf;
+}
+
+float currentLoopP()  { return motor.PID_current_q.P; }
+float currentLoopI()  { return motor.PID_current_q.I; }
+float currentLoopTf() { return motor.LPF_current_q.Tf; }
+
+float focLoopHz() {
+    if (!foc_running || motor.loopfoc_time_us == 0) return 0.0f;
+    return 1e6f / (float)motor.loopfoc_time_us;
+}
 
 void setVelocityTelemetryIntervalMs(uint8_t ms) { velocity_interval_us = (uint32_t)ms * 1000u; }
 uint8_t velocityTelemetryIntervalMs() { return (uint8_t)(velocity_interval_us / 1000u); }

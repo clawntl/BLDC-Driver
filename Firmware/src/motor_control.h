@@ -2,6 +2,8 @@
 
 #include <SimpleFOC.h>
 
+#include "board_settings.h"
+
 extern BLDCMotor motor;
 
 // One-time driver/sensor/FOC configuration, including the direction and
@@ -35,6 +37,17 @@ bool focRunning();
 // with PARAM_VELOCITY_INTERVAL_MS, back to the default after a reset).
 void setVelocityTelemetryIntervalMs(uint8_t ms);
 uint8_t velocityTelemetryIntervalMs();
+
+// Current loop (PI gains on both axes and the current filter) from these
+// settings, applied at once. The CAN and serial commands change the pending
+// settings and apply them; a revert applies the active ones again.
+void applyCurrentLoopSettings(const BoardSettings &s);
+// Values in use.
+float currentLoopP();
+float currentLoopI();
+float currentLoopTf();
+// FOC loop rate [Hz] while running (SimpleFOC's filtered loop time), else 0.
+float focLoopHz();
 
 // DriverState / StatusFlag values from can_protocol.h, for the CAN heartbeat.
 uint8_t driverState();

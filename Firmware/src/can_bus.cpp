@@ -247,10 +247,54 @@ static void handleSetParam(const CANFDMessage &rxMsg) {
             replySetParam(param, CONFIG_OK, (float)ms);
             return;
         }
+        // Current loop: pending (kept by CMD_SAVE) and applied at once.
+        case PARAM_CURRENT_P:
+        case PARAM_CURRENT_I:
+        case PARAM_CURRENT_TF: {
+            float &field = param == PARAM_CURRENT_P ? p.currentP
+                         : param == PARAM_CURRENT_I ? p.currentI : p.currentTf;
+            const bool ok = param == PARAM_CURRENT_P ? validCurrentP(v)
+                          : param == PARAM_CURRENT_I ? validCurrentI(v) : validCurrentTf(v);
+            if (!ok) {
+                replySetParam(param, CONFIG_ERR_BAD_VALUE, field);
+                return;
+            }
+            field = v;
+            applyCurrentLoopSettings(p);
+            Serial.print("CAN: current loop P ");
+            Serial.print(p.currentP, 3);
+            Serial.print(", I ");
+            Serial.print(p.currentI, 1);
+            Serial.print(", filter ");
+            Serial.print(p.currentTf * 1000.0f, 3);
+            Serial.println(" ms (applied, unsaved)");
+            replySetParam(param, CONFIG_OK, field);
+            return;
+        }
         default:
             replySetParam(param, CONFIG_ERR_UNKNOWN, 0);
             return;
     }
+}
+
+static void handleGetParam(const CANFDMessage &rxMsg) {
+    const uint8_t param = rxMsg.len >= 2 ? rxMsg.data[1] : 0;
+    const BoardSettings &p = pendingSettings();
+    uint8_t status = CONFIG_OK;
+    float v = 0;
+    switch (param) {
+        case PARAM_NODE_ID:              v = p.nodeId; break;
+        case PARAM_INVERT:               v = p.invertDirection ? 1.0f : 0.0f; break;
+        case PARAM_VELOCITY_INTERVAL_MS: v = velocityTelemetryIntervalMs(); break;
+        case PARAM_CURRENT_P:            v = currentLoopP(); break;
+        case PARAM_CURRENT_I:            v = currentLoopI(); break;
+        case PARAM_CURRENT_TF:           v = currentLoopTf(); break;
+        case PARAM_FOC_LOOP_HZ:          v = focLoopHz(); break;
+        default:                         status = CONFIG_ERR_UNKNOWN; break;
+    }
+    uint8_t frame[7] = { CMD_GET_PARAM, param, status };
+    float2bytesMSB(v, &frame[3]);
+    sendFrame(frame, sizeof(frame), telemetryCanId());
 }
 
 static void handleCalibration(const CANFDMessage &rxMsg) {
@@ -299,6 +343,9 @@ static void handleCommandMessage(const CANFDMessage &rxMsg) {
         case CMD_SET_PARAM:
             handleSetParam(rxMsg);
             break;
+        case CMD_GET_PARAM:
+            handleGetParam(rxMsg);
+            break;
         case CMD_CALIBRATION:
             handleCalibration(rxMsg);
             break;
@@ -313,6 +360,7 @@ static void handleCommandMessage(const CANFDMessage &rxMsg) {
             break;
         case CMD_REVERT:
             pendingSettings() = activeSettings();
+            applyCurrentLoopSettings(activeSettings());
             Serial.println("CAN: pending changes discarded");
             replyStatus(CMD_REVERT, CONFIG_OK);
             break;
