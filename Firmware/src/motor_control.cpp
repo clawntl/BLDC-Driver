@@ -333,7 +333,9 @@ void motorControlLoop() {
     // second sample per loop and distort it.
     const uint32_t currentTime = _micros();
     if (currentTime - lastVelocitySendTime >= velocity_interval_us) {
-        sendFloat(CMD_SHAFT_VELOCITY, direction_sign * motor.shaft_velocity, telemetryCanId());
+        // With the measured currents the loop works with (protocol 6).
+        sendVelocityTelemetry(direction_sign * motor.shaft_velocity,
+                              direction_sign * motor.current.q, motor.current.d);
         lastVelocitySendTime = currentTime;
     }
 
@@ -390,6 +392,10 @@ uint8_t statusFlags() {
 float measuredSupplyVoltage() { return supply_voltage; }
 float trackedSupplyVoltage() { return tracked_supply; }
 float phaseVoltageLimit() { return driver.voltage_limit; }
+float measuredCurrentQ() { return foc_running ? direction_sign * motor.current.q : 0.0f; }
+float measuredCurrentD() { return foc_running ? motor.current.d : 0.0f; }
+float appliedVoltageQ() { return foc_running ? direction_sign * motor.voltage.q : 0.0f; }
+float appliedVoltageD() { return foc_running ? motor.voltage.d : 0.0f; }
 
 float commandedCurrent() { return target_current; }
 

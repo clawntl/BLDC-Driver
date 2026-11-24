@@ -28,20 +28,30 @@
 // 4 = CMD_GET_BOARD_INFO (model name + capabilities) and input current in
 //     the heartbeat (CAP_MEASURES_INPUT_CURRENT);
 // 5 = CMD_GET_PARAM, current loop parameters (PARAM_CURRENT_*) and the FOC
-//     loop rate (PARAM_FOC_LOOP_HZ).
-#define CAN_PROTOCOL_VERSION 5
+//     loop rate (PARAM_FOC_LOOP_HZ);
+// 6 = the measured motor current (q and d axis) in CMD_SHAFT_VELOCITY.
+#define CAN_PROTOCOL_VERSION 6
 
 // Firmware version, reported by CMD_GET_INFO and the serial `config` command.
 #define FIRMWARE_VERSION_MAJOR 1
-#define FIRMWARE_VERSION_MINOR 5
+#define FIRMWARE_VERSION_MINOR 6
 #define FIRMWARE_VERSION_PATCH 0
+
+// Scale of the d current in CMD_SHAFT_VELOCITY: 16 mA per count, +-2.03 A.
+#define D_CURRENT_LSB_MA 16
 
 #define CAN_BIT_RATE     1'000'000 // 1 Mbit/s classic CAN 2.0B (no FD / bit rate switch used)
 #define CAN_SAMPLE_POINT 88        // % ; resolves to an exact 87.5% sample point at this bit rate/clock
 
 enum CAN_CMD : uint8_t {
     // Driver -> host, every SHAFT_VELOCITY_TELEMETRY_INTERVAL_US while FOC runs.
-    // [0x02][float rad/s, big-endian]. Sign follows the invert setting.
+    // [0x02][float rad/s, big-endian][q current, int16 mA big-endian]
+    //      [d current, int8, units of D_CURRENT_LSB_MA]
+    // The currents are the MEASURED ones the current loop works with
+    // (filtered, as SimpleFOC uses them); protocol 6, firmware 1.6+. The
+    // velocity and q current follow the invert setting (the same sign as
+    // the current commands); d is as measured. Older firmware sends only
+    // the first 5 bytes, so check the length.
     CMD_SHAFT_VELOCITY = 0x02,
 
     // Driver -> host, every CAN_STATUS_INTERVAL_MS (also while FOC is not running).

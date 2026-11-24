@@ -153,6 +153,19 @@ void printConfig() {
     if (flags & STATUS_FLAG_COMMAND_TIMEOUT) Serial.print("  [COMMAND TIMEOUT]");
     if (flags & STATUS_FLAG_DRIVER_FAULT)    Serial.print("  [DRV8316 FAULT]");
     Serial.println();
+    if (focRunning()) {
+        Serial.print("Measured: q ");
+        Serial.print(measuredCurrentQ(), 3);
+        Serial.print(" A, d ");
+        Serial.print(measuredCurrentD(), 3);
+        Serial.print(" A; applied q ");
+        Serial.print(appliedVoltageQ(), 2);
+        Serial.print(" V, d ");
+        Serial.print(appliedVoltageD(), 2);
+        Serial.print(" V; shaft ");
+        Serial.print(motor.shaft_velocity, 1);
+        Serial.println(" rad/s");
+    }
     if (flags & STATUS_FLAG_CALIBRATION_USED) Serial.println("Align:   stored alignment used (sensor alignment skipped)");
 
     printCurrentLoop();

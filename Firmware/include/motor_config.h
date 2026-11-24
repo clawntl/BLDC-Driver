@@ -55,8 +55,9 @@
 // CAN) and they can be changed while the motor runs. The defaults are
 // SimpleFOC's own, which suit a low-resistance motor: on a GM3506 gimbal
 // motor (2.8 ohm per phase, 5.6 line-to-line) the loop then follows a step in
-// about 20 ms and lags behind back-EMF when the wheel speeds up. Raising I speeds it up (closed-loop time
-// constant roughly (R + P) / I); see docs/firmware.md#current-loop.
+// about 20 ms and lags behind back-EMF when the wheel speeds up. Raising I
+// speeds it up (closed-loop time constant roughly (R + P) / I); see
+// docs/firmware.md#current-loop.
 #define CURRENT_LOOP_P_DEFAULT   3.0f      // V per A
 #define CURRENT_LOOP_I_DEFAULT   300.0f    // V per A per s
 #define CURRENT_LOOP_TF_DEFAULT  0.00053f  // s, = 1 / (2 pi 300 Hz)

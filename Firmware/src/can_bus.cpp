@@ -125,6 +125,19 @@ void sendFloat(uint8_t cmd, float dat, uint32_t canID) {
     sendFrame(frame, sizeof(frame), canID);
 }
 
+void sendVelocityTelemetry(float radPerS, float iqAmps, float idAmps) {
+    uint8_t frame[8];
+    frame[0] = CMD_SHAFT_VELOCITY;
+    float2bytesMSB(radPerS, &frame[1]);
+    const float ma = std::isfinite(iqAmps) ? iqAmps * 1000.0f : 0.0f;
+    const int16_t q = (int16_t)constrain(lroundf(ma), -32767L, 32767L);
+    frame[5] = (uint8_t)((uint16_t)q >> 8);
+    frame[6] = (uint8_t)((uint16_t)q & 0xFF);
+    const float dc = std::isfinite(idAmps) ? idAmps * 1000.0f / D_CURRENT_LSB_MA : 0.0f;
+    frame[7] = (uint8_t)(int8_t)constrain(lroundf(dc), -127L, 127L);
+    sendFrame(frame, sizeof(frame), telemetryCanId());
+}
+
 void sendError(uint8_t errorCode) {
     sendFloat(CMD_ERROR, (float)errorCode, telemetryCanId());
 }

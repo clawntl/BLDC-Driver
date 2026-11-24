@@ -324,6 +324,10 @@ def decode(can_id, data):
             return "node %d status   %s, flags %s, supply %s%s" % (
                 n, state_name(d[1]), flag_names(d[2]), "%.2f V" % (mv / 1000) if mv else "-",
                 ", input " + fmt_input(mv, ma) if ma is not None else "")
+        if c == CMD_SHAFT_VELOCITY and len(d) >= 8:
+            iq = int.from_bytes(bytes(d[5:7]), "big", signed=True) / 1000.0
+            idd = int.from_bytes(bytes(d[7:8]), "big", signed=True) * 0.016
+            return "node %d velocity %.2f rad/s, current q %+.3f A d %+.3f A" % (n, be_float(d, 1), iq, idd)
         if c == CMD_SHAFT_VELOCITY and len(d) >= 5:
             return "node %d velocity %.2f rad/s" % (n, be_float(d, 1))
         if c == CMD_START_FOC and len(d) >= 5:

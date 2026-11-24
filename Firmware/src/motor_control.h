@@ -62,6 +62,14 @@ float trackedSupplyVoltage();
 // voltage available is this / sqrt(3).
 float phaseVoltageLimit();
 
+// Measured q / d axis currents [A] (filtered, as the current loop uses them;
+// q follows the invert setting like the commands) and the voltages the loop
+// applies [V]. 0 while FOC isn't running.
+float measuredCurrentQ();
+float measuredCurrentD();
+float appliedVoltageQ();
+float appliedVoltageD();
+
 // Target current currently applied (after inversion/timeout), in Amps.
 float commandedCurrent();
 
