@@ -75,7 +75,7 @@ Folders are named after the board and revision (`bldc_driver_v02`, `minifoc_mk2`
 > [!CAUTION]
 > Test new motors with the wheels off the ground and a current-limited supply. The `motor_test` bench firmware ([docs/firmware.md](docs/firmware.md#bench-test-firmware-motor_test)) checks the encoder, power stage and current sense step by step before you run closed-loop control.
 
-The firmware's default motor parameters (11 pole pairs, 2 A current limit, 10 V voltage limit) live in [`Firmware/include/motor_config.h`](Firmware/include/motor_config.h). Change them to match your motor.
+The firmware's default motor parameters (11 pole pairs, 2 A current limit, PWM duty up to 92% of the supply) live in [`Firmware/include/motor_config.h`](Firmware/include/motor_config.h). Change them to match your motor.
 
 ## License
 

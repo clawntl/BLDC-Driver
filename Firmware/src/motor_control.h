@@ -2,6 +2,8 @@
 
 #include <SimpleFOC.h>
 
+#include "board_settings.h"
+
 extern BLDCMotor motor;
 
 // One-time driver/sensor/FOC configuration, including the direction and
@@ -36,12 +38,37 @@ bool focRunning();
 void setVelocityTelemetryIntervalMs(uint8_t ms);
 uint8_t velocityTelemetryIntervalMs();
 
+// Current loop (PI gains on both axes and the current filter) from these
+// settings, applied at once. The CAN and serial commands change the pending
+// settings and apply them; a revert applies the active ones again.
+void applyCurrentLoopSettings(const BoardSettings &s);
+// Values in use.
+float currentLoopP();
+float currentLoopI();
+float currentLoopTf();
+// FOC loop rate [Hz] while running (SimpleFOC's filtered loop time), else 0.
+float focLoopHz();
+
 // DriverState / StatusFlag values from can_protocol.h, for the CAN heartbeat.
 uint8_t driverState();
 uint8_t statusFlags();
 
 // Supply voltage measured at boot (or the fallback default), in Volts.
 float measuredSupplyVoltage();
+// Supply voltage used for the PWM scaling, in Volts: followed (filtered)
+// while FOC runs, see MOTOR_MAX_DUTY.
+float trackedSupplyVoltage();
+// Phase voltage range in use (driver.voltage_limit), in Volts. The q-axis
+// voltage available is this / sqrt(3).
+float phaseVoltageLimit();
+
+// Measured q / d axis currents [A] (filtered, as the current loop uses them;
+// q follows the invert setting like the commands) and the voltages the loop
+// applies [V]. 0 while FOC isn't running.
+float measuredCurrentQ();
+float measuredCurrentD();
+float appliedVoltageQ();
+float appliedVoltageD();
 
 // Target current currently applied (after inversion/timeout), in Amps.
 float commandedCurrent();

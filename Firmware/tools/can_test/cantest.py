@@ -116,14 +116,19 @@ CMD_SAVE           = 0x24
 CMD_REVERT         = 0x25
 CMD_REBOOT         = 0x26
 CMD_GET_BOARD_INFO = 0x27   # protocol 4+
+CMD_GET_PARAM      = 0x28   # protocol 5+
 CMD_NACK           = 0xFE
 CMD_ERROR          = 0xFF
 
 CMD_NAMES = {CMD_START_FOC: "START_FOC", CMD_GET_INFO: "GET_INFO", CMD_GET_CONFIG: "GET_CONFIG",
              CMD_SET_PARAM: "SET_PARAM", CMD_CALIBRATION: "CALIBRATION", CMD_SAVE: "SAVE",
-             CMD_REVERT: "REVERT", CMD_REBOOT: "REBOOT", CMD_GET_BOARD_INFO: "GET_BOARD_INFO"}
+             CMD_REVERT: "REVERT", CMD_REBOOT: "REBOOT", CMD_GET_BOARD_INFO: "GET_BOARD_INFO",
+             CMD_GET_PARAM: "GET_PARAM"}
 PARAM_NODE_ID, PARAM_INVERT, PARAM_VELOCITY_INTERVAL_MS = 1, 2, 0x10
-PARAM_NAMES = {PARAM_NODE_ID: "node ID", PARAM_INVERT: "invert", PARAM_VELOCITY_INTERVAL_MS: "velocity interval ms"}
+PARAM_CURRENT_P, PARAM_CURRENT_I, PARAM_CURRENT_TF, PARAM_FOC_LOOP_HZ = 0x20, 0x21, 0x22, 0x30  # protocol 5+
+PARAM_NAMES = {PARAM_NODE_ID: "node ID", PARAM_INVERT: "invert", PARAM_VELOCITY_INTERVAL_MS: "velocity interval ms",
+               PARAM_CURRENT_P: "current loop P", PARAM_CURRENT_I: "current loop I",
+               PARAM_CURRENT_TF: "current filter Tf", PARAM_FOC_LOOP_HZ: "FOC loop Hz"}
 CAL_STORE, CAL_CLEAR = 1, 2
 
 
@@ -287,6 +292,9 @@ def decode_reply(data):
     if c == CMD_SET_PARAM and len(data) >= 7:
         return "SET_PARAM %s: %s, now %g" % (PARAM_NAMES.get(data[1], "0x%02X" % data[1]),
                                              CONFIG_STATUS.get(data[2], data[2]), be_float(data, 3))
+    if c == CMD_GET_PARAM and len(data) >= 7:
+        return "GET_PARAM %s: %s, value %g" % (PARAM_NAMES.get(data[1], "0x%02X" % data[1]),
+                                               CONFIG_STATUS.get(data[2], data[2]), be_float(data, 3))
     if c == CMD_CALIBRATION and len(data) >= 3:
         return "CALIBRATION %s: %s" % ({1: "store", 2: "clear"}.get(data[1], data[1]),
                                        CONFIG_STATUS.get(data[2], data[2]))
@@ -316,6 +324,10 @@ def decode(can_id, data):
             return "node %d status   %s, flags %s, supply %s%s" % (
                 n, state_name(d[1]), flag_names(d[2]), "%.2f V" % (mv / 1000) if mv else "-",
                 ", input " + fmt_input(mv, ma) if ma is not None else "")
+        if c == CMD_SHAFT_VELOCITY and len(d) >= 8:
+            iq = int.from_bytes(bytes(d[5:7]), "big", signed=True) / 1000.0
+            idd = int.from_bytes(bytes(d[7:8]), "big", signed=True) * 0.016
+            return "node %d velocity %.2f rad/s, current q %+.3f A d %+.3f A" % (n, be_float(d, 1), iq, idd)
         if c == CMD_SHAFT_VELOCITY and len(d) >= 5:
             return "node %d velocity %.2f rad/s" % (n, be_float(d, 1))
         if c == CMD_START_FOC and len(d) >= 5:

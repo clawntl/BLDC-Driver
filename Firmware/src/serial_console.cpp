@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 #include <IWatchdog.h>
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <strings.h>
 
@@ -19,7 +21,8 @@ static bool settingsEqual(const BoardSettings &a, const BoardSettings &b) {
         && a.invertDirection == b.invertDirection
         && a.calibrationValid == b.calibrationValid
         && (!a.calibrationValid
-            || (a.sensorDirection == b.sensorDirection && a.zeroElectricAngle == b.zeroElectricAngle));
+            || (a.sensorDirection == b.sensorDirection && a.zeroElectricAngle == b.zeroElectricAngle))
+        && a.currentP == b.currentP && a.currentI == b.currentI && a.currentTf == b.currentTf;
 }
 
 static void printSettings(const char *label, const BoardSettings &s) {
@@ -37,6 +40,33 @@ static void printSettings(const char *label, const BoardSettings &s) {
     } else {
         Serial.println("none");
     }
+    Serial.print("         current loop P ");
+    Serial.print(s.currentP, 3);
+    Serial.print(" V/A, I ");
+    Serial.print(s.currentI, 1);
+    Serial.print(" V/(A s), filter ");
+    Serial.print(s.currentTf * 1000.0f, 3);
+    Serial.println(" ms");
+}
+
+static void printCurrentLoop() {
+    Serial.print("Current loop in use: P ");
+    Serial.print(currentLoopP(), 3);
+    Serial.print(" V/A, I ");
+    Serial.print(currentLoopI(), 1);
+    Serial.print(" V/(A s), filter ");
+    Serial.print(currentLoopTf() * 1000.0f, 3);
+    Serial.print(" ms; FOC loop ");
+    const float hz = focLoopHz();
+    if (hz > 0) { Serial.print(hz, 0); Serial.println(" Hz"); }
+    else Serial.println("not running");
+    Serial.print("Defaults: P ");
+    Serial.print(CURRENT_LOOP_P_DEFAULT, 1);
+    Serial.print(", I ");
+    Serial.print(CURRENT_LOOP_I_DEFAULT, 0);
+    Serial.print(", filter ");
+    Serial.print(CURRENT_LOOP_TF_DEFAULT * 1000.0f, 2);
+    Serial.println(" ms  (`set curp|curi|curtf <value>`, `cur defaults`)");
 }
 
 static const char *stateName(uint8_t state) {
@@ -107,16 +137,38 @@ void printConfig() {
     }
     Serial.print(", ");
     Serial.print(measuredSupplyVoltage(), 2);
-    Serial.print(" V at boot (used for PWM scaling; ");
+    Serial.print(" V at boot, ");
+    Serial.print(trackedSupplyVoltage(), 2);
+    Serial.print(" V used for PWM scaling (");
     Serial.print(supplySensorName());
     Serial.println(")");
+    Serial.print("Motor voltage: phases 0-");
+    Serial.print(phaseVoltageLimit(), 2);
+    Serial.print(" V, up to ");
+    Serial.print(phaseVoltageLimit() * _1_SQRT3, 2);
+    Serial.println(" V on the q axis (Space Vector PWM)");
     Serial.print("Current: ");
     Serial.print(commandedCurrent(), 3);
     Serial.print(" A commanded");
     if (flags & STATUS_FLAG_COMMAND_TIMEOUT) Serial.print("  [COMMAND TIMEOUT]");
     if (flags & STATUS_FLAG_DRIVER_FAULT)    Serial.print("  [DRV8316 FAULT]");
     Serial.println();
+    if (focRunning()) {
+        Serial.print("Measured: q ");
+        Serial.print(measuredCurrentQ(), 3);
+        Serial.print(" A, d ");
+        Serial.print(measuredCurrentD(), 3);
+        Serial.print(" A; applied q ");
+        Serial.print(appliedVoltageQ(), 2);
+        Serial.print(" V, d ");
+        Serial.print(appliedVoltageD(), 2);
+        Serial.print(" V; shaft ");
+        Serial.print(motor.shaft_velocity, 1);
+        Serial.println(" rad/s");
+    }
     if (flags & STATUS_FLAG_CALIBRATION_USED) Serial.println("Align:   stored alignment used (sensor alignment skipped)");
+
+    printCurrentLoop();
 
     Serial.print("Flash:   settings page at 0x");
     Serial.println(settingsFlashAddress(), HEX);
@@ -128,6 +180,12 @@ static void printHelp() {
     Serial.println("  set node 1-15           this board's CAN node ID (sets its CAN IDs)");
     Serial.println("  set side left|right     shorthand for node 1 / node 2 (a robot's wheels)");
     Serial.println("  set invert on|off       flip command/telemetry sign");
+    Serial.println("  set curp <V/A>          current loop P (default 3)");
+    Serial.println("  set curi <V/(A s)>      current loop I (default 300)");
+    Serial.println("  set curtf <ms>          current filter time constant (default 0.53 ms)");
+    Serial.println("                          (the current loop applies at once; `save` keeps it)");
+    Serial.println("  cur                     show the current loop in use and the FOC loop rate");
+    Serial.println("  cur defaults            current loop back to the defaults (applies at once)");
     Serial.println("  cal store               keep this boot's FOC alignment (FOC must be running)");
     Serial.println("  cal clear               forget the stored alignment");
     Serial.println("  save                    write settings to flash and reboot (stops the motor)");
@@ -135,7 +193,7 @@ static void printHelp() {
     Serial.println("  start                   start FOC (bench use; normally sent over CAN)");
     Serial.println("  reboot                  reset the board");
     Serial.println("  dfu                     reboot into the USB DFU bootloader");
-    Serial.println("Changes are pending until `save`.");
+    Serial.println("Changes are pending until `save` (the current loop also applies at once).");
 }
 
 static bool parseOnOff(const char *arg, bool &out) {
@@ -148,10 +206,31 @@ static void cmdSet(char *args) {
     char *key = strtok(args, " ");
     char *val = strtok(nullptr, " ");
     if (!key || !val) {
-        Serial.println("usage: set node 1-15  |  set side left|right  |  set invert on|off");
+        Serial.println("usage: set node 1-15  |  set side left|right  |  set invert on|off  |  set curp|curi|curtf <value>");
         return;
     }
     BoardSettings &p = pendingSettings();
+    // Current loop: applied at once as well as pending.
+    if (!strcasecmp(key, "curp") || !strcasecmp(key, "curi") || !strcasecmp(key, "curtf")) {
+        char *end = nullptr;
+        const float v = strtof(val, &end);
+        if (end == val || *end) { Serial.println("not a number"); return; }
+        if (!strcasecmp(key, "curp")) {
+            if (!validCurrentP(v)) { Serial.print("curp must be 0-"); Serial.println(CURRENT_LOOP_P_MAX, 0); return; }
+            p.currentP = v;
+        } else if (!strcasecmp(key, "curi")) {
+            if (!validCurrentI(v)) { Serial.print("curi must be 0-"); Serial.println(CURRENT_LOOP_I_MAX, 0); return; }
+            p.currentI = v;
+        } else {
+            const float s = v / 1000.0f; // typed in ms
+            if (!validCurrentTf(s)) { Serial.print("curtf must be 0-"); Serial.print(CURRENT_LOOP_TF_MAX * 1000.0f, 0); Serial.println(" ms"); return; }
+            p.currentTf = s;
+        }
+        applyCurrentLoopSettings(p);
+        printCurrentLoop();
+        Serial.println("Applied now; type `save` to keep it (or `revert`).");
+        return;
+    }
     if (!strcasecmp(key, "node")) {
         const int id = atoi(val);
         if (!validNodeId(id)) { Serial.println("node must be 1-15"); return; }
@@ -223,7 +302,25 @@ static void handleLine(char *line) {
     else if (!strcasecmp(line, "set"))    cmdSet(args);
     else if (!strcasecmp(line, "cal"))    cmdCal(args);
     else if (!strcasecmp(line, "save"))   cmdSave();
-    else if (!strcasecmp(line, "revert")) { pendingSettings() = activeSettings(); Serial.println("Pending changes discarded."); }
+    else if (!strcasecmp(line, "revert")) {
+        pendingSettings() = activeSettings();
+        applyCurrentLoopSettings(activeSettings());
+        Serial.println("Pending changes discarded.");
+    }
+    else if (!strcasecmp(line, "cur")) {
+        if (!strcasecmp(args, "defaults")) {
+            BoardSettings &p = pendingSettings();
+            p.currentP  = CURRENT_LOOP_P_DEFAULT;
+            p.currentI  = CURRENT_LOOP_I_DEFAULT;
+            p.currentTf = CURRENT_LOOP_TF_DEFAULT;
+            applyCurrentLoopSettings(p);
+            Serial.println("Current loop back to the defaults (applied; `save` to keep).");
+        } else if (*args) {
+            Serial.println("usage: cur  |  cur defaults");
+            return;
+        }
+        printCurrentLoop();
+    }
     else if (!strcasecmp(line, "start"))  requestStartFOC();
     else if (!strcasecmp(line, "reboot")) { Serial.println("Rebooting..."); softwareReset(); }
     else if (!strcasecmp(line, "dfu"))    { Serial.println("Entering DFU mode..."); Serial.flush(); rebootToDFU(); }

@@ -13,6 +13,10 @@ bool canStarted();
 // No-op if CAN isn't running.
 void sendFloat(uint8_t cmd, float dat, uint32_t canID);
 
+// [CMD_SHAFT_VELOCITY][float rad/s][int16 q mA][int8 d / D_CURRENT_LSB_MA]
+// (see can_protocol.h). No-op if CAN isn't running.
+void sendVelocityTelemetry(float radPerS, float iqAmps, float idAmps);
+
 // [CMD_ERROR][float code] / [CMD_START_FOC][float 1 or 0] to the host.
 void sendError(uint8_t errorCode);
 void sendStartResult(bool ok);
