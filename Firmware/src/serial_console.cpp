@@ -15,6 +15,7 @@
 #include "can_protocol.h"
 #include "dfu.h"
 #include "motor_control.h"
+#include "cogging.h"
 
 static bool settingsEqual(const BoardSettings &a, const BoardSettings &b) {
     return a.nodeId == b.nodeId
@@ -22,7 +23,8 @@ static bool settingsEqual(const BoardSettings &a, const BoardSettings &b) {
         && a.calibrationValid == b.calibrationValid
         && (!a.calibrationValid
             || (a.sensorDirection == b.sensorDirection && a.zeroElectricAngle == b.zeroElectricAngle))
-        && a.currentP == b.currentP && a.currentI == b.currentI && a.currentTf == b.currentTf;
+        && a.currentP == b.currentP && a.currentI == b.currentI && a.currentTf == b.currentTf
+        && a.cogComp == b.cogComp;
 }
 
 static void printSettings(const char *label, const BoardSettings &s) {
@@ -46,7 +48,8 @@ static void printSettings(const char *label, const BoardSettings &s) {
     Serial.print(s.currentI, 1);
     Serial.print(" V/(A s), filter ");
     Serial.print(s.currentTf * 1000.0f, 3);
-    Serial.println(" ms");
+    Serial.print(" ms, anti-cogging ");
+    Serial.println(s.cogComp == 2 ? "slots only" : s.cogComp ? "on" : "off");
 }
 
 static void printCurrentLoop() {
@@ -95,6 +98,10 @@ void printConfig() {
     Serial.print(", capabilities 0x");
     Serial.print(boardCapabilities(), HEX);
     Serial.println(")");
+    char serial[25];
+    boardSerialText(serial);
+    Serial.print("Serial:  ");
+    Serial.println(serial);
     const BoardSettings &active  = activeSettings();
     const BoardSettings &pending = pendingSettings();
 
@@ -169,6 +176,7 @@ void printConfig() {
     if (flags & STATUS_FLAG_CALIBRATION_USED) Serial.println("Align:   stored alignment used (sensor alignment skipped)");
 
     printCurrentLoop();
+    Cogging::printStatus(Serial);
 
     Serial.print("Flash:   settings page at 0x");
     Serial.println(settingsFlashAddress(), HEX);
@@ -188,12 +196,15 @@ static void printHelp() {
     Serial.println("  cur defaults            current loop back to the defaults (applies at once)");
     Serial.println("  cal store               keep this boot's FOC alignment (FOC must be running)");
     Serial.println("  cal clear               forget the stored alignment");
+    Serial.println("  cog [on|slots|off]      anti-cogging status / compensation (applies at once)");
+    Serial.println("  cog cal|refine [kp kd speed]  measure it (FOC running, wheel free, ~55 s)");
+    Serial.println("  cog abort|clear|dump    stop a calibration / forget the table / CSV");
     Serial.println("  save                    write settings to flash and reboot (stops the motor)");
     Serial.println("  revert                  discard unsaved changes");
     Serial.println("  start                   start FOC (bench use; normally sent over CAN)");
     Serial.println("  reboot                  reset the board");
     Serial.println("  dfu                     reboot into the USB DFU bootloader");
-    Serial.println("Changes are pending until `save` (the current loop also applies at once).");
+    Serial.println("Changes are pending until `save` (the current loop and anti-cogging on/off also apply at once).");
 }
 
 static bool parseOnOff(const char *arg, bool &out) {
@@ -273,6 +284,37 @@ static void cmdCal(char *args) {
     Serial.println("Type `save` to write and reboot.");
 }
 
+static void cmdCog(char *args) {
+    char *sub = strtok(args, " ");
+    if (!sub) { Cogging::printStatus(Serial); return; }
+    if (!strcasecmp(sub, "on") || !strcasecmp(sub, "off") || !strcasecmp(sub, "slots")) {
+        pendingSettings().cogComp = !strcasecmp(sub, "on") ? COG_MODE_FULL
+                                  : !strcasecmp(sub, "slots") ? COG_MODE_SLOTS : COG_MODE_OFF;
+        Cogging::printStatus(Serial);
+        Serial.println("Applied now; type `save` to keep it (or `revert`).");
+    } else if (!strcasecmp(sub, "cal") || !strcasecmp(sub, "refine")) {
+        float v[3] = { 0, 0, 0 };
+        for (int i = 0; i < 3; i++) {
+            char *a = strtok(nullptr, " ");
+            if (!a) break;
+            char *end = nullptr;
+            v[i] = strtof(a, &end);
+            if (end == a || *end || v[i] < 0) { Serial.println("not a number"); return; }
+        }
+        if (v[2] > 2.0f) { Serial.println("speed must be at most 2 rad/s"); return; }
+        if (!Cogging::startCalibration(!strcasecmp(sub, "refine"), v[0], v[1], v[2])) Cogging::printStatus(Serial);
+    } else if (!strcasecmp(sub, "abort")) {
+        Cogging::abort();
+    } else if (!strcasecmp(sub, "clear")) {
+        Cogging::clear();
+        Serial.println("Table cleared; type `save` to keep that (or `revert`).");
+    } else if (!strcasecmp(sub, "dump")) {
+        Cogging::startDump();
+    } else {
+        Serial.println("see `help`");
+    }
+}
+
 static void cmdSave() {
     if (focRunning()) {
         Serial.println("Stopping motor for the flash write...");
@@ -301,10 +343,12 @@ static void handleLine(char *line) {
     else if (!strcasecmp(line, "config") || !strcasecmp(line, "status")) printConfig();
     else if (!strcasecmp(line, "set"))    cmdSet(args);
     else if (!strcasecmp(line, "cal"))    cmdCal(args);
+    else if (!strcasecmp(line, "cog"))    cmdCog(args);
     else if (!strcasecmp(line, "save"))   cmdSave();
     else if (!strcasecmp(line, "revert")) {
         pendingSettings() = activeSettings();
         applyCurrentLoopSettings(activeSettings());
+        Cogging::revert();
         Serial.println("Pending changes discarded.");
     }
     else if (!strcasecmp(line, "cur")) {
@@ -334,6 +378,8 @@ static void handleLine(char *line) {
 // Bytes are accumulated one at a time (Serial.readStringUntil() would stall
 // the FOC loop for up to its timeout on a partial line).
 void pollSerialConsole() {
+    Cogging::serviceDump(Serial);
+
     static char buf[48];
     static uint8_t len = 0;
     static bool overflow = false;

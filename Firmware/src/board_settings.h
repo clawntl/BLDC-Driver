@@ -39,6 +39,12 @@ struct BoardSettings {
     float currentP  = CURRENT_LOOP_P_DEFAULT;   // V/A
     float currentI  = CURRENT_LOOP_I_DEFAULT;   // V/(A s)
     float currentTf = CURRENT_LOOP_TF_DEFAULT;  // s
+
+    // Anti-cogging compensation (settings layout 3, firmware 1.7): 0 off,
+    // 1 on, 2 slots only (COG_MODE_* in cogging.h). Like the current loop:
+    // applies at once, saving keeps it. The table itself is stored after
+    // these settings, see cogging.h.
+    uint8_t cogComp = 0;
 };
 
 // Range checks for the current loop values (see CURRENT_LOOP_*_MAX).
@@ -56,11 +62,13 @@ BoardSettings &pendingSettings();
 
 // Reads flash into both copies. Returns false (and leaves defaults, i.e.
 // "unconfigured") if the page is blank, corrupt or from an incompatible
-// layout version. Settings saved by firmware 1.0-1.3 (layout 1) are read
-// too, with the current loop at its defaults.
+// layout version. Settings saved by older firmware are read too: 1.0-1.3
+// (layout 1) with the current loop at its defaults, 1.4-1.6 (layout 2) with
+// anti-cogging off.
 bool loadBoardSettings();
 
-// Writes pendingSettings() to flash and reads it back to verify. Stalls the
+// Writes pendingSettings() and the anti-cogging table to flash and reads
+// them back to verify. Stalls the
 // CPU for tens of ms while the page is erased, so the motor must NOT be
 // running when this is called. Returns true on a verified write; refuses (and
 // returns false) if the firmware image has grown into the settings page.
@@ -83,7 +91,8 @@ uint8_t  currentFloatOffset();
 
 bool validNodeId(int id);
 
-// True if the pending settings differ from the active ones (unsaved changes).
+// True if the pending settings differ from the active ones, or the
+// anti-cogging table has been calibrated / cleared since the last save.
 bool settingsUnsaved();
 
 // Size of the firmware image in flash, in bytes.

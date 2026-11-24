@@ -29,12 +29,14 @@
 //     the heartbeat (CAP_MEASURES_INPUT_CURRENT);
 // 5 = CMD_GET_PARAM, current loop parameters (PARAM_CURRENT_*) and the FOC
 //     loop rate (PARAM_FOC_LOOP_HZ);
-// 6 = the measured motor current (q and d axis) in CMD_SHAFT_VELOCITY.
-#define CAN_PROTOCOL_VERSION 6
+// 6 = the measured motor current (q and d axis) in CMD_SHAFT_VELOCITY;
+// 7 = anti-cogging (CMD_COGGING, PARAM_COG_COMP) and the MCU serial number
+//     (CMD_GET_BOARD_INFO pages 6-7).
+#define CAN_PROTOCOL_VERSION 7
 
 // Firmware version, reported by CMD_GET_INFO and the serial `config` command.
 #define FIRMWARE_VERSION_MAJOR 1
-#define FIRMWARE_VERSION_MINOR 6
+#define FIRMWARE_VERSION_MINOR 7
 #define FIRMWARE_VERSION_PATCH 0
 
 // Scale of the d current in CMD_SHAFT_VELOCITY: 16 mA per count, +-2.03 A.
@@ -110,6 +112,11 @@ enum CAN_CMD : uint8_t {
     //   page 1-5:  [0x27][page][6 characters of the model name, e.g. "MiniFO"]
     //              (pages 1-5 = characters 0-29; NUL-padded after the end, so
     //              stop at the first page containing a NUL)
+    //   page 6-7:  [0x27][page][6 bytes of the MCU's 96-bit unique ID]: the
+    //              board's serial number (protocol 7). Page 6 = bytes 0-5,
+    //              page 7 = bytes 6-11: the three 32-bit ID words, each
+    //              big-endian. Shown as 24 hex digits. Older firmware answers
+    //              as for "other".
     //   other:     [0xFE][0x27][CONFIG_ERR_BAD_VALUE]
     // Firmware before protocol 4 NACKs it ([0xFE][0x27][CONFIG_ERR_UNKNOWN]).
     CMD_GET_BOARD_INFO = 0x27,
@@ -118,6 +125,33 @@ enum CAN_CMD : uint8_t {
     // [0x28][param][status][float value]. Saved parameters read the PENDING
     // value; runtime and tuning parameters the value in use.
     CMD_GET_PARAM = 0x28,
+
+    // Anti-cogging (protocol 7): [0x29][COG_*] ->
+    //   COG_STATUS, COG_CALIBRATE, COG_REFINE, COG_ABORT, COG_CLEAR:
+    //     [0x29][op][status][CogState][progress % (during / after a
+    //      calibration) or CogFailure (state COG_STATE_FAILED)]
+    //     [COG_FLAG_* bits][table peak-to-peak, 4 mA units][friction, 2 mA units]
+    //   COG_RESULT:
+    //     [0x29][op][status][coverage %][forward/backward agreement %]
+    //     [largest position error in the last calibration, 0.1 mrad units, 255 = more]
+    //     [noise left out of the table, 0.5 mA units (0 = none since boot)][0]
+    //   COG_READ: [0x29][6][bin hi][bin lo] ->
+    //     [0x29][6][bin hi][bin lo][table counts of bins bin..bin+3, int8]
+    //     (bin hi 0xFF in the reply = no table / bad bin). COG_INFO gives the scale.
+    //   COG_INFO: [0x29][7] ->
+    //     [0x29][7][status][A per table count, float big-endian][bins / 16][0]
+    //     (status CONFIG_ERR_BAD_VALUE without a table)
+    // CALIBRATE turns the rotor slowly one turn each way (~55 s) with the
+    // board's own position loop and records the current it needs at each
+    // angle: FOC must be running (else CONFIG_ERR_NOT_RUNNING) and the wheel
+    // free to turn. REFINE does the same with the existing table applied and
+    // adds what is left (CONFIG_ERR_BAD_VALUE without a table for this
+    // motor). A current command above 50 mA aborts either. Poll COG_STATUS
+    // for progress; the reply to CALIBRATE / REFINE comes straight away.
+    // A new table, or CLEAR, is pending until CMD_SAVE (CMD_REVERT brings
+    // back the stored one); CONFIG_FLAG_UNSAVED includes it. Compensation
+    // is switched by PARAM_COG_COMP.
+    CMD_COGGING = 0x29,
 
     // Driver -> host: [0xFE][command byte][CONFIG_ERR_UNKNOWN]: command not
     // understood (e.g. a newer host talking to this firmware).
@@ -136,6 +170,7 @@ enum ConfigParam : uint8_t {
     PARAM_CURRENT_P  = 0x20, // current loop P, V/A, 0-50 (default 3)
     PARAM_CURRENT_I  = 0x21, // current loop I, V/(A s), 0-100000 (default 300)
     PARAM_CURRENT_TF = 0x22, // current measurement filter time constant, s, 0-0.01 (default 0.00053)
+    PARAM_COG_COMP   = 0x23, // anti-cogging compensation: 0 off (default), 1 on, 2 slots only (protocol 7)
     // Read-only (CMD_GET_PARAM; CMD_SET_PARAM answers CONFIG_ERR_UNKNOWN).
     PARAM_FOC_LOOP_HZ = 0x30, // FOC loop rate while running, Hz (0 = not running)
 };
@@ -152,6 +187,49 @@ enum ConfigStatus : uint8_t {
     CONFIG_ERR_BAD_VALUE    = 2, // value out of range
     CONFIG_ERR_NOT_ALIGNED  = 3, // CAL_STORE without a fresh alignment this boot
     CONFIG_ERR_FLASH        = 4, // the firmware image overlaps the settings page
+    CONFIG_ERR_NOT_RUNNING  = 5, // needs FOC running (CMD_COGGING calibrate / refine)
+};
+
+// CMD_COGGING operations.
+enum CogOp : uint8_t {
+    COG_STATUS    = 0,
+    COG_CALIBRATE = 1,
+    COG_REFINE    = 2,
+    COG_ABORT     = 3,
+    COG_CLEAR     = 4,
+    COG_RESULT    = 5,
+    COG_READ      = 6,
+    COG_INFO      = 7,
+};
+
+// CMD_COGGING calibration state (Cogging::State).
+enum CogState : uint8_t {
+    COG_STATE_IDLE     = 0, // no calibration since boot
+    COG_STATE_SETTLING = 1,
+    COG_STATE_FORWARD  = 2,
+    COG_STATE_BACKWARD = 3,
+    COG_STATE_DONE     = 4, // last calibration succeeded
+    COG_STATE_FAILED   = 5, // last calibration failed (CogFailure in byte 4)
+};
+
+enum CogFailure : uint8_t {
+    COG_FAIL_NONE         = 0,
+    COG_FAIL_NOT_RUNNING  = 1, // FOC stopped
+    COG_FAIL_HOST_COMMAND = 2, // a current command arrived
+    COG_FAIL_STALLED      = 3, // the rotor didn't follow (wheel blocked?)
+    COG_FAIL_ABORTED      = 4, // COG_ABORT, `cog abort`
+    COG_FAIL_COVERAGE     = 5, // angles missed in a pass
+    COG_FAIL_NO_TABLE     = 6, // refine without a table
+};
+
+enum CogFlag : uint8_t {
+    COG_FLAG_TABLE     = 1 << 0, // a table is loaded (or newly calibrated)
+    COG_FLAG_ENABLED   = 1 << 1, // compensation switched on (PARAM_COG_COMP)
+    COG_FLAG_UNSAVED   = 1 << 2, // table calibrated / cleared since the last save
+    COG_FLAG_MISMATCH  = 1 << 3, // table measured with the other sensor direction: not applied
+    COG_FLAG_APPLIED   = 1 << 4, // compensation is being applied now (enabled, table matches, FOC running)
+    COG_FLAG_REFINED   = 1 << 5, // the table's last calibration was a refine
+    COG_FLAG_SLOTS_ONLY = 1 << 6, // compensation mode 2: harmonics 1..COG_LOW_HARMONICS per turn left out
 };
 
 // CMD_GET_CONFIG flags.

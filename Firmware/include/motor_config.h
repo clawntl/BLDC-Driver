@@ -66,6 +66,41 @@
 #define CURRENT_LOOP_I_MAX       100000.0f
 #define CURRENT_LOOP_TF_MAX      0.01f
 
+// Anti-cogging (see src/cogging.h and docs/firmware.md#anti-cogging).
+// Calibration: the position loop that turns the rotor (defaults; `cog cal`
+// takes others), how fast, the most current it may use, and when it gives
+// up. Worked out in a simulation of a GM3506 wheel (inertia 1.4e-5 kg m^2,
+// Kt 0.054 N m/A) with a 2 ms current loop: much stiffer and the loop
+// oscillates, much softer and the rotor snaps from one cogging step to the
+// next instead of following.
+#define COG_CAL_KP             20.0f   // A/rad
+#define COG_CAL_KD             0.08f   // A/(rad/s)
+#define COG_CAL_SPEED          0.25f   // rad/s: one turn each way takes ~26 s
+#define COG_CAL_CURRENT_LIMIT  1.0f    // A
+#define COG_CAL_STALL_RAD      0.2f    // position error that counts as "not following"
+// During a calibration the current loop's I is raised to at least this (the
+// position loop needs the current within ~2 ms) and the velocity filter is
+// shortened to this; both go back afterwards.
+#define COG_CAL_CURRENT_I      3000.0f // V/(A s)
+#define COG_CAL_VELOCITY_TF    0.001f  // s
+// A host current command bigger than this aborts a calibration.
+#define COG_HOST_ABORT_A       0.05f   // A
+// The table keeps harmonics 1..COG_HARMONICS per turn (plus 264 and 528,
+// the slot/pole cogging of a 24-slot 22-pole motor); the rest of each bin is
+// measurement noise. The GM3506s measured so far cog mostly at 2, 22-26 and
+// 42-48 per turn.
+#define COG_HARMONICS          64
+// "Slots only" compensation (cogComp 2) leaves out harmonics 1..this.
+#define COG_LOW_HARMONICS      3
+// Compensation: the table is read ahead of the rotor by the current loop's
+// response time, (MOTOR_PHASE_RESISTANCE + P) / I (1.9 ms with P 3, I 3000),
+// and fades out between these shaft speeds (at 15 rad/s the 48-per-turn
+// component comes round 115 times a second, more than the current loop can
+// follow).
+#define MOTOR_PHASE_RESISTANCE 2.8f    // ohm per phase (GM3506; its datasheet's 5.6 is line-to-line)
+#define COG_FADE_START         6.0f    // rad/s
+#define COG_FADE_END           15.0f   // rad/s
+
 // Voltage applied during sensor alignment at startup, in Volts.
 #define MOTOR_VOLTAGE_SENSOR_ALIGN 3.0f
 

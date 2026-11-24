@@ -16,6 +16,7 @@
 #include "can_bus.h"
 #include "motor_config.h"
 #include "board_settings.h"
+#include "cogging.h"
 
 static SPIClass SPI_1(SPI1_MOSI, SPI1_MISO, SPI1_SCK);
 
@@ -284,6 +285,7 @@ void requestStartFOC() {
 
 void setTargetCurrent(float amps) {
     if (!std::isfinite(amps)) return; // ignore NaN / Inf
+    Cogging::noteHostCurrent(amps);   // a real command aborts an anti-cogging calibration
     target_current = direction_sign * constrain(amps, -MOTOR_CURRENT_LIMIT, MOTOR_CURRENT_LIMIT);
     lastCommandMs = millis();
     if (command_timed_out) {
@@ -326,7 +328,9 @@ void motorControlLoop() {
     trackSupplyVoltage();
 
     motor.loopFOC();
-    motor.move(target_current);
+    // The host's current plus the anti-cogging compensation (when on), or
+    // during an anti-cogging calibration that calibration's own current.
+    motor.move(Cogging::update(target_current, pendingSettings().cogComp));
 
     // move() has already updated motor.shaft_velocity; calling
     // motor.shaftVelocity() again would feed the velocity low-pass filter a
@@ -343,6 +347,7 @@ void motorControlLoop() {
 }
 
 void stopMotor() {
+    Cogging::abort(Cogging::Failure::NotRunning);
     motor.disable();
     foc_running = false;
     target_current = 0;

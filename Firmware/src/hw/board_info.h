@@ -12,3 +12,9 @@ uint32_t boardCapabilities();
 
 // BOARD_MODEL from the board header, e.g. "MiniFOC Mk2".
 const char *boardModel();
+
+// The MCU's 96-bit unique ID, the board's serial number: the three 32-bit
+// words, each big-endian (CMD_GET_BOARD_INFO pages 6-7).
+void boardSerialBytes(uint8_t out[12]);
+// The same as 24 hex digits plus a terminating NUL.
+void boardSerialText(char out[25]);

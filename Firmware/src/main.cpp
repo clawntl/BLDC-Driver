@@ -15,6 +15,7 @@
 #include "hw/supply.h"
 #include "serial_console.h"
 #include "dfu.h"
+#include "cogging.h"
 
 // LED patterns: unconfigured = fast blink (5 Hz), idle = short blip every
 // second, running = solid on, FOC start failed = double blink.
@@ -87,6 +88,7 @@ void setup() {
     if (!loadBoardSettings()) {
         Serial.println("No valid board settings in flash.");
     }
+    Cogging::begin(); // the anti-cogging table, stored after the settings
     printConfig();
 
     if (boardConfigured()) {

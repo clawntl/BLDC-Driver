@@ -13,6 +13,7 @@
 #include "hw/supply.h"
 #include "hw/board_info.h"
 #include "dfu.h"
+#include "cogging.h"
 
 #include <IWatchdog.h>
 #include <cmath>
@@ -199,6 +200,11 @@ static void replyGetBoardInfo(uint8_t page) {
             const size_t at = (size_t)(page - 1) * 6 + i;
             frame[2 + i] = at < len ? (uint8_t)model[at] : 0;
         }
+    } else if (page <= 7) {
+        // MCU unique ID (serial number), 6 bytes per page.
+        uint8_t uid[12];
+        boardSerialBytes(uid);
+        memcpy(&frame[2], &uid[(page - 6) * 6], 6);
     } else {
         const uint8_t nack[3] = { CMD_NACK, CMD_GET_BOARD_INFO, CONFIG_ERR_BAD_VALUE };
         sendFrame(nack, sizeof(nack), telemetryCanId());
@@ -284,6 +290,17 @@ static void handleSetParam(const CANFDMessage &rxMsg) {
             replySetParam(param, CONFIG_OK, field);
             return;
         }
+        // Anti-cogging on/off: pending (kept by CMD_SAVE) and applied at once.
+        case PARAM_COG_COMP: {
+            const long m = lroundf(v);
+            if (m < 0 || m > 2) { replySetParam(param, CONFIG_ERR_BAD_VALUE, p.cogComp); return; }
+            p.cogComp = (uint8_t)m;
+            Serial.print("CAN: anti-cogging compensation mode ");
+            Serial.print(p.cogComp);
+            Serial.println(" (applied, unsaved)");
+            replySetParam(param, CONFIG_OK, p.cogComp);
+            return;
+        }
         default:
             replySetParam(param, CONFIG_ERR_UNKNOWN, 0);
             return;
@@ -303,6 +320,7 @@ static void handleGetParam(const CANFDMessage &rxMsg) {
         case PARAM_CURRENT_I:            v = currentLoopI(); break;
         case PARAM_CURRENT_TF:           v = currentLoopTf(); break;
         case PARAM_FOC_LOOP_HZ:          v = focLoopHz(); break;
+        case PARAM_COG_COMP:             v = p.cogComp; break;
         default:                         status = CONFIG_ERR_UNKNOWN; break;
     }
     uint8_t frame[7] = { CMD_GET_PARAM, param, status };
@@ -335,6 +353,86 @@ static void handleCalibration(const CANFDMessage &rxMsg) {
     sendFrame(frame, sizeof(frame), telemetryCanId());
 }
 
+static uint8_t cogFlags() {
+    uint8_t f = 0;
+    if (Cogging::tableValid())   f |= COG_FLAG_TABLE;
+    if (pendingSettings().cogComp) f |= COG_FLAG_ENABLED;
+    if (Cogging::tableUnsaved()) f |= COG_FLAG_UNSAVED;
+    if (Cogging::tableValid() && motorCalibrated() && !Cogging::tableMatchesMotor()) f |= COG_FLAG_MISMATCH;
+    if (focRunning() && pendingSettings().cogComp && Cogging::tableMatchesMotor() && !Cogging::calibrating())
+        f |= COG_FLAG_APPLIED;
+    if (Cogging::tableRefined()) f |= COG_FLAG_REFINED;
+    if (pendingSettings().cogComp == COG_MODE_SLOTS) f |= COG_FLAG_SLOTS_ONLY;
+    return f;
+}
+
+static uint8_t clampUnits(float v, float unit) {
+    if (!(v > 0)) return 0;
+    return (uint8_t)min(255L, lroundf(v / unit));
+}
+
+static void handleCogging(const CANFDMessage &rxMsg) {
+    const uint8_t op = rxMsg.len >= 2 ? rxMsg.data[1] : COG_STATUS;
+    uint8_t status = CONFIG_OK;
+    switch (op) {
+        case COG_STATUS:
+        case COG_RESULT:
+            break;
+        case COG_READ: {
+            // Four table counts per frame; bin hi 0xFF = no table / bad bin.
+            const int bin = rxMsg.len >= 4 ? (rxMsg.data[2] << 8) | rxMsg.data[3] : -1;
+            uint8_t f[8] = { CMD_COGGING, COG_READ, 0xFF, 0xFF, 0, 0, 0, 0 };
+            if (Cogging::tableValid() && bin >= 0 && bin < COG_BINS) {
+                f[2] = (uint8_t)(bin >> 8);
+                f[3] = (uint8_t)bin;
+                for (int i = 0; i < 4; i++) f[4 + i] = (uint8_t)Cogging::tableCount(bin + i);
+            }
+            sendFrame(f, sizeof(f), telemetryCanId());
+            return;
+        }
+        case COG_INFO: {
+            uint8_t f[8] = { CMD_COGGING, COG_INFO, Cogging::tableValid() ? (uint8_t)CONFIG_OK : (uint8_t)CONFIG_ERR_BAD_VALUE };
+            float2bytesMSB(Cogging::tableScale(), &f[3]);
+            f[7] = COG_BINS / 16;
+            sendFrame(f, sizeof(f), telemetryCanId());
+            return;
+        }
+        case COG_CALIBRATE:
+        case COG_REFINE:
+            if (!focRunning() || !motorCalibrated()) status = CONFIG_ERR_NOT_RUNNING;
+            else if (op == COG_REFINE && !Cogging::tableMatchesMotor()) status = CONFIG_ERR_BAD_VALUE;
+            else if (!Cogging::startCalibration(op == COG_REFINE)) status = CONFIG_ERR_NOT_RUNNING;
+            break;
+        case COG_ABORT:
+            Cogging::abort();
+            break;
+        case COG_CLEAR:
+            Cogging::clear();
+            Serial.println("CAN: anti-cogging table cleared (unsaved)");
+            break;
+        default: {
+            const uint8_t nack[3] = { CMD_NACK, CMD_COGGING, CONFIG_ERR_UNKNOWN };
+            sendFrame(nack, sizeof(nack), telemetryCanId());
+            return;
+        }
+    }
+    uint8_t frame[8] = { CMD_COGGING, op, status, 0, 0, 0, 0, 0 };
+    if (op == COG_RESULT) {
+        frame[3] = Cogging::tableCoverage();
+        frame[4] = Cogging::tableQuality();
+        frame[5] = clampUnits(Cogging::lastMaxTrackingError(), 0.0001f);
+        frame[6] = clampUnits(Cogging::lastFilteredNoise(), 0.0005f);
+    } else {
+        const Cogging::State st = Cogging::state();
+        frame[3] = (uint8_t)st;
+        frame[4] = st == Cogging::State::Failed ? (uint8_t)Cogging::failure() : Cogging::progress();
+        frame[5] = cogFlags();
+        frame[6] = clampUnits(Cogging::tableAmplitude(), 0.004f);
+        frame[7] = clampUnits(Cogging::tableFriction(), 0.002f);
+    }
+    sendFrame(frame, sizeof(frame), telemetryCanId());
+}
+
 static void handleCommandMessage(const CANFDMessage &rxMsg) {
     if (rxMsg.len < 1) return;
 
@@ -362,6 +460,9 @@ static void handleCommandMessage(const CANFDMessage &rxMsg) {
         case CMD_CALIBRATION:
             handleCalibration(rxMsg);
             break;
+        case CMD_COGGING:
+            handleCogging(rxMsg);
+            break;
         case CMD_SAVE:
             if (firmwareOverlapsSettings()) {
                 replyStatus(CMD_SAVE, CONFIG_ERR_FLASH);
@@ -374,6 +475,7 @@ static void handleCommandMessage(const CANFDMessage &rxMsg) {
         case CMD_REVERT:
             pendingSettings() = activeSettings();
             applyCurrentLoopSettings(activeSettings());
+            Cogging::revert();
             Serial.println("CAN: pending changes discarded");
             replyStatus(CMD_REVERT, CONFIG_OK);
             break;

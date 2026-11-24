@@ -117,18 +117,28 @@ CMD_REVERT         = 0x25
 CMD_REBOOT         = 0x26
 CMD_GET_BOARD_INFO = 0x27   # protocol 4+
 CMD_GET_PARAM      = 0x28   # protocol 5+
+CMD_COGGING        = 0x29   # protocol 7+
 CMD_NACK           = 0xFE
 CMD_ERROR          = 0xFF
 
 CMD_NAMES = {CMD_START_FOC: "START_FOC", CMD_GET_INFO: "GET_INFO", CMD_GET_CONFIG: "GET_CONFIG",
              CMD_SET_PARAM: "SET_PARAM", CMD_CALIBRATION: "CALIBRATION", CMD_SAVE: "SAVE",
              CMD_REVERT: "REVERT", CMD_REBOOT: "REBOOT", CMD_GET_BOARD_INFO: "GET_BOARD_INFO",
-             CMD_GET_PARAM: "GET_PARAM"}
+             CMD_GET_PARAM: "GET_PARAM", CMD_COGGING: "COGGING"}
 PARAM_NODE_ID, PARAM_INVERT, PARAM_VELOCITY_INTERVAL_MS = 1, 2, 0x10
 PARAM_CURRENT_P, PARAM_CURRENT_I, PARAM_CURRENT_TF, PARAM_FOC_LOOP_HZ = 0x20, 0x21, 0x22, 0x30  # protocol 5+
+PARAM_COG_COMP = 0x23  # protocol 7+
 PARAM_NAMES = {PARAM_NODE_ID: "node ID", PARAM_INVERT: "invert", PARAM_VELOCITY_INTERVAL_MS: "velocity interval ms",
                PARAM_CURRENT_P: "current loop P", PARAM_CURRENT_I: "current loop I",
-               PARAM_CURRENT_TF: "current filter Tf", PARAM_FOC_LOOP_HZ: "FOC loop Hz"}
+               PARAM_CURRENT_TF: "current filter Tf", PARAM_FOC_LOOP_HZ: "FOC loop Hz",
+               PARAM_COG_COMP: "anti-cogging"}
+# CMD_COGGING (protocol 7): operations, calibration states, failures, flags.
+COG_OPS = {0: "status", 1: "calibrate", 2: "refine", 3: "abort", 4: "clear", 5: "result", 6: "read", 7: "info"}
+COG_STATES = {0: "idle", 1: "settling", 2: "forward", 3: "backward", 4: "done", 5: "failed"}
+COG_FAILURES = {0: "-", 1: "FOC not running", 2: "host sent a current", 3: "rotor didn't follow",
+                4: "aborted", 5: "angles missed", 6: "no table to refine"}
+COG_FLAGS = ((1, "table"), (2, "enabled"), (4, "UNSAVED"), (8, "other-sensor-direction"), (16, "applied"),
+             (32, "refined"), (64, "slots-only"))
 CAL_STORE, CAL_CLEAR = 1, 2
 
 
@@ -155,11 +165,13 @@ def reply_status(data):
         return data[2]
     if c == CMD_CALIBRATION and len(data) >= 3:
         return data[2]
+    if c == CMD_COGGING and len(data) >= 3:
+        return data[2]
     if c in (CMD_SAVE, CMD_REVERT, CMD_REBOOT) and len(data) >= 2:
         return data[1]
     return 0
 CONFIG_STATUS = {0: "OK", 1: "unknown command/parameter", 2: "bad value", 3: "no alignment to store",
-                 4: "flash overlaps settings"}
+                 4: "flash overlaps settings", 5: "FOC not running"}
 CONFIG_FLAG_INVERT, CONFIG_FLAG_CALIBRATION, CONFIG_FLAG_SENSOR_CCW, CONFIG_FLAG_UNSAVED = 1, 2, 4, 8
 
 STATE_NAMES = {0: "unconfigured", 1: "idle", 2: "running", 3: "fault (FOC start failed)"}
@@ -282,6 +294,8 @@ def decode_reply(data):
         if data[1] == 0:
             return "board info: hardware rev %d, capabilities %s" % (
                 data[6], cap_names(int.from_bytes(bytes(data[2:6]), "big")))
+        if data[1] in (6, 7):
+            return "board serial number part %d: %s" % (data[1] - 5, bytes(data[2:8]).hex().upper())
         return "board name part %d: %r" % (data[1], bytes(data[2:8]).split(b"\0")[0].decode("ascii", "replace"))
     if c == CMD_GET_CONFIG and len(data) >= 8:
         f = data[3]
@@ -300,6 +314,25 @@ def decode_reply(data):
                                        CONFIG_STATUS.get(data[2], data[2]))
     if c in (CMD_SAVE, CMD_REVERT, CMD_REBOOT) and len(data) >= 2:
         return "%s: %s" % (CMD_NAMES[c], CONFIG_STATUS.get(data[1], data[1]))
+    if c == CMD_COGGING and len(data) >= 8 and data[1] == 6:
+        if data[2] == 0xFF:
+            return "COGGING read: no table"
+        vals = [b - 256 if b > 127 else b for b in data[4:8]]
+        return "COGGING read: bins %d-%d: %s (counts)" % ((data[2] << 8) | data[3], ((data[2] << 8) | data[3]) + 3, vals)
+    if c == CMD_COGGING and len(data) >= 8 and data[1] == 7:
+        return "COGGING info: %s, %.3f mA per count, %d bins" % (CONFIG_STATUS.get(data[2], data[2]),
+                                                               be_float(data, 3) * 1000, data[7] * 16)
+    if c == CMD_COGGING and len(data) >= 8:
+        head = "COGGING %s: %s" % (COG_OPS.get(data[1], data[1]), CONFIG_STATUS.get(data[2], data[2]))
+        if data[1] == 5:
+            err = "> 25.4" if data[5] == 255 else "%.1f" % (data[5] / 10)
+            return "%s, coverage %d%%, agreement %d%%, max position error %s mrad, noise left out %.1f mA" % (
+                head, data[3], data[4], err, data[6] / 2)
+        state = COG_STATES.get(data[3], data[3])
+        detail = COG_FAILURES.get(data[4], data[4]) if data[3] == 5 else "%d%%" % data[4]
+        flags = " ".join(n for bit, n in COG_FLAGS if data[5] & bit) or "no table"
+        return "%s, calibration %s (%s), %s, table %d mA p-p, friction %d mA" % (
+            head, state, detail, flags, data[6] * 4, data[7] * 2)
     if c == CMD_NACK and len(data) >= 2:
         return "NACK: command 0x%02X not understood" % data[1]
     return None
