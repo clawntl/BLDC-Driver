@@ -18,8 +18,33 @@
 #define SUPPLY_VOLTAGE_MIN  6.0f
 #define SUPPLY_VOLTAGE_MAX  30.0f
 
-// Driver voltage limit, in Volts.
-#define MOTOR_VOLTAGE_LIMIT 10.0f
+// Phase voltage range, in Volts: the PWM outputs swing between 0 and this
+// (driver.voltage_limit). It is set from the supply as the supply changes
+// (see MOTOR_MAX_DUTY), and never above MOTOR_VOLTAGE_LIMIT.
+//
+// How much of it reaches the motor depends on the modulation. With Space
+// Vector PWM (used since firmware 1.5) the largest undistorted q-axis
+// voltage is this / sqrt(3), which is also what the current loop may ask
+// for (motor.voltage_limit). With Sine PWM (before 1.5) it was only this / 2:
+// 5 V with the old fixed 10 V limit, which capped a GM3506 at about 137
+// rad/s with no current left at all, and full current only to ~20 rad/s.
+//
+// A cap for higher-voltage supplies; with a 3S pack (9.6-12.6 V) the duty
+// limit below is what applies.
+#define MOTOR_VOLTAGE_LIMIT 12.0f
+
+// Largest PWM duty used: driver.voltage_limit = MOTOR_MAX_DUTY x the supply
+// voltage (measured live, filtered). The DRV8316's current-sense amplifiers
+// measure through the low-side FETs, so every phase needs some low-side on
+// time in each PWM period for the current to be sampled. At 20 kHz, 0.92
+// leaves 4 us. The q-axis voltage available is then
+// 0.92 x supply / sqrt(3): 6.7 V at 12.6 V, 5.9 V at 11.1 V, 5.1 V at 9.6 V.
+#define MOTOR_MAX_DUTY 0.92f
+
+// How often the supply voltage is followed while FOC runs, in milliseconds,
+// and the time constant of the filter on it, in seconds.
+#define SUPPLY_TRACK_INTERVAL_MS 20
+#define SUPPLY_TRACK_FILTER_S    0.5f
 
 // Motor phase current limit, in Amps.
 #define MOTOR_CURRENT_LIMIT 2.0f
@@ -28,9 +53,9 @@
 // the measured currents. These are the defaults; each board keeps its own
 // values in its settings (`set curp/curi/curtf` over USB, PARAM_CURRENT_* over
 // CAN) and they can be changed while the motor runs. The defaults are
-// SimpleFOC's own, which suit a low-resistance motor: on a 5.6 ohm gimbal
-// motor (GM3506) the loop then follows a step in about 30 ms and lags behind
-// back-EMF when the wheel speeds up. Raising I speeds it up (closed-loop time
+// SimpleFOC's own, which suit a low-resistance motor: on a GM3506 gimbal
+// motor (2.8 ohm per phase, 5.6 line-to-line) the loop then follows a step in
+// about 20 ms and lags behind back-EMF when the wheel speeds up. Raising I speeds it up (closed-loop time
 // constant roughly (R + P) / I); see docs/firmware.md#current-loop.
 #define CURRENT_LOOP_P_DEFAULT   3.0f      // V per A
 #define CURRENT_LOOP_I_DEFAULT   300.0f    // V per A per s

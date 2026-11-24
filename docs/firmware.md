@@ -98,9 +98,26 @@ The console runs at 115200 baud. Lines end in LF or CR, and commands are case-in
 
 ### Current loop
 
-The board runs SimpleFOC's FOC current control: a PI controller per axis turns the error between the commanded and the measured current into a voltage. Its defaults (P = 3 V/A, I = 300 V/(A·s), filter 0.53 ms) suit low-resistance motors. On a higher-resistance gimbal motor the loop is slow: with R = 5.6 Ω (GM3506) the actual current follows a step in the command with a time constant of roughly (R + P) / I ≈ 30 ms, and it falls behind whenever the motor speeds up, because the back-EMF rises faster than the integral can follow. A balancing robot sees that as torque lag.
+The board runs SimpleFOC's FOC current control: a PI controller per axis turns the error between the commanded and the measured current into a voltage. Its defaults (P = 3 V/A, I = 300 V/(A·s), filter 0.53 ms) suit low-resistance motors. On a higher-resistance gimbal motor the loop is slow: with R = 2.8 Ω per phase (GM3506; its datasheet's 5.6 Ω is line-to-line) the actual current follows a step in the command with a time constant of roughly (R + P) / I ≈ 20 ms, and it falls behind whenever the motor speeds up, because the back-EMF rises faster than the integral can follow. A balancing robot sees that as torque lag.
 
 Raising **I** speeds the loop up roughly in proportion; that's the main knob. **P** adds a direct response, but too much for the motor's inductance and the FOC loop rate makes it ring. A starting point for a 5–6 Ω motor is P = 3 and I = 1500–3000 (about 3–6 ms). Check the FOC loop rate with `cur`: keep the loop's response well below it (I / (R + P) under about a tenth of the loop rate in rad/s). Settings saved by firmware 1.0–1.3 are kept when updating; the current loop then starts at the defaults.
+
+### Motor voltage (firmware 1.5)
+
+The drivers use **Space Vector PWM**. The PWM scaling follows the **live supply voltage** (filtered over about 0.5 s), not just the reading at boot.
+
+**Phase voltage range.** The phases swing between 0 and `MOTOR_MAX_DUTY` × the supply, capped at `MOTOR_VOLTAGE_LIMIT`. The 0.92 duty limit leaves the DRV8316's low-side current-sense amplifiers 4 µs of low-side on-time per 20 kHz period.
+
+**Motor voltage.** The most the motor gets on the q axis without distortion is the range / √3. That's also the current loop's output limit.
+
+| Supply | q-axis voltage | GM3506 (Ke ≈ 0.036 V/(rad/s)): no-current speed | full 1.5 A up to (R = 2.8 Ω) |
+|---|---|---|---|
+| 12.6 V (3S full) | 6.7 V | ~185 rad/s | ~70 rad/s |
+| 11.1 V (3S nominal) | 5.9 V | ~164 rad/s | ~47 rad/s |
+| 9.6 V (EBS-SBR cutoff) | 5.1 V | ~142 rad/s | ~25 rad/s |
+| Firmware 1.4 (Sine PWM, fixed 10 V) | 5.0 V | ~137 rad/s | ~20 rad/s |
+
+**Why it changed.** Sine PWM centres the phases on half the range and can only reach range / 2. Firmware 1.4 also scaled the PWM by the supply measured at boot, so as the battery ran down the real voltages fell below the commanded ones. The serial console's `status` shows the supply in use and the motor voltage.
 
 ## Runtime behaviour
 
@@ -134,7 +151,9 @@ Raising **I** speeds the loop up roughly in proportion; that's the main knob. **
 |---|---|---|
 | `MOTOR_POLE_PAIRS` | 11 | Rotor pole pairs. **Set this for your motor** |
 | `MOTOR_CURRENT_LIMIT` | 2.0 A | Commanded current clamp |
-| `MOTOR_VOLTAGE_LIMIT` | 10.0 V | Driver voltage limit (also capped at the supply voltage) |
+| `MOTOR_VOLTAGE_LIMIT` | 12.0 V | Cap on the phase voltage range (driver.voltage_limit). With a 3S pack the duty limit below applies instead |
+| `MOTOR_MAX_DUTY` | 0.92 | Largest PWM duty: the phase voltage range is this × the supply, followed live. Leaves low-side on-time for the DRV8316's current sense |
+| `SUPPLY_TRACK_INTERVAL_MS` / `SUPPLY_TRACK_FILTER_S` | 20 ms / 0.5 s | How the supply voltage is followed while FOC runs |
 | `MOTOR_VOLTAGE_SENSOR_ALIGN` | 3.0 V | Voltage used during sensor alignment |
 | `MOTOR_VOLTAGE_POWER_SUPPLY` | 12.0 V | Fallback when the VIN measurement is out of range |
 | `SUPPLY_VOLTAGE_MIN` / `_MAX` | 6 / 30 V | Sanity window for the measured VIN |

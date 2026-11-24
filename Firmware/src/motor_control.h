@@ -55,6 +55,12 @@ uint8_t statusFlags();
 
 // Supply voltage measured at boot (or the fallback default), in Volts.
 float measuredSupplyVoltage();
+// Supply voltage used for the PWM scaling, in Volts: followed (filtered)
+// while FOC runs, see MOTOR_MAX_DUTY.
+float trackedSupplyVoltage();
+// Phase voltage range in use (driver.voltage_limit), in Volts. The q-axis
+// voltage available is this / sqrt(3).
+float phaseVoltageLimit();
 
 // Target current currently applied (after inversion/timeout), in Amps.
 float commandedCurrent();

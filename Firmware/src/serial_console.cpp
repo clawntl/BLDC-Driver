@@ -137,9 +137,16 @@ void printConfig() {
     }
     Serial.print(", ");
     Serial.print(measuredSupplyVoltage(), 2);
-    Serial.print(" V at boot (used for PWM scaling; ");
+    Serial.print(" V at boot, ");
+    Serial.print(trackedSupplyVoltage(), 2);
+    Serial.print(" V used for PWM scaling (");
     Serial.print(supplySensorName());
     Serial.println(")");
+    Serial.print("Motor voltage: phases 0-");
+    Serial.print(phaseVoltageLimit(), 2);
+    Serial.print(" V, up to ");
+    Serial.print(phaseVoltageLimit() * _1_SQRT3, 2);
+    Serial.println(" V on the q axis (Space Vector PWM)");
     Serial.print("Current: ");
     Serial.print(commandedCurrent(), 3);
     Serial.print(" A commanded");

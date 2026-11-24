@@ -46,7 +46,35 @@ static bool calibration_used = false;
 static bool command_timed_out = false;
 static bool drv_fault = false;
 
-static float supply_voltage = 0;
+static float supply_voltage = 0;      // measured at boot
+static float tracked_supply = 0;      // followed while running (filtered), used for PWM scaling
+static uint32_t lastSupplyTrackMs = 0;
+
+// SimpleFOC converts volts to PWM duty with driver.voltage_power_supply, so
+// it has to be the real supply voltage, which on a battery falls from 12.6 V
+// to under 10 V. The phase voltage range follows it (MOTOR_MAX_DUTY) and the
+// current loop may ask for up to the largest undistorted Space Vector PWM
+// voltage, range / sqrt(3). Before motor.init() it only sets the driver; once
+// running it also updates the current loop's limits.
+static void applySupplyVoltage(float volts, bool running) {
+    driver.voltage_power_supply = volts;
+    driver.voltage_limit = min(MOTOR_VOLTAGE_LIMIT, MOTOR_MAX_DUTY * volts);
+    const float q = driver.voltage_limit * _1_SQRT3;
+    if (running) motor.updateVoltageLimit(q);
+    else motor.voltage_limit = q;
+}
+
+// Follows the live supply reading while FOC runs (see applySupplyVoltage).
+static void trackSupplyVoltage() {
+    const uint32_t now = millis();
+    if (now - lastSupplyTrackMs < SUPPLY_TRACK_INTERVAL_MS) return;
+    const float dt = (now - lastSupplyTrackMs) / 1000.0f;
+    lastSupplyTrackMs = now;
+    const float v = supplyVoltageNow();
+    if (!(v >= SUPPLY_VOLTAGE_MIN && v <= SUPPLY_VOLTAGE_MAX)) return; // no (sane) reading: keep the last one
+    tracked_supply += (v - tracked_supply) * min(1.0f, dt / SUPPLY_TRACK_FILTER_S);
+    applySupplyVoltage(tracked_supply, true);
+}
 
 static uint32_t lastVelocitySendTime = 0;
 static uint32_t velocity_interval_us = SHAFT_VELOCITY_TELEMETRY_INTERVAL_US;
@@ -121,8 +149,8 @@ void setupFOC() {
     // Measure the real supply so SimpleFOC's volts -> PWM duty conversion is
     // correct. Must happen before current_sense.init() (see hw/supply.h).
     supply_voltage = measuredSupplyVoltageOrDefault();
-    driver.voltage_power_supply = supply_voltage;
-    driver.voltage_limit = min(MOTOR_VOLTAGE_LIMIT, driver.voltage_power_supply);
+    tracked_supply = supply_voltage;
+    applySupplyVoltage(supply_voltage, false);
 
     driver.init(&SPI_1);
 
@@ -146,8 +174,9 @@ void setupFOC() {
 
     // aligning voltage
     motor.voltage_sensor_align = MOTOR_VOLTAGE_SENSOR_ALIGN;
-    // choose FOC modulation
-    motor.foc_modulation = FOCModulationType::SinePWM;
+    // FOC modulation: Space Vector PWM gets 15% more voltage to the motor
+    // than Sine PWM from the same supply (see MOTOR_VOLTAGE_LIMIT).
+    motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
 
     motor.torque_controller = TorqueControlType::foc_current;
 
@@ -178,6 +207,14 @@ static bool startFOC() {
     // alone, the DRV8316 had no supply when setupFOC() configured it, so it
     // would otherwise run with its defaults (buck, over-current, slew).
     configureDRV8316(driver);
+
+    // The supply may have changed since boot (e.g. powered on from USB alone,
+    // battery plugged in later).
+    {
+        const float v = supplyVoltageNow();
+        if (v >= SUPPLY_VOLTAGE_MIN && v <= SUPPLY_VOLTAGE_MAX) tracked_supply = v;
+        applySupplyVoltage(tracked_supply, false);
+    }
 
     if (!motor.init()) {
         Serial.println("Motor init failed!");
@@ -286,6 +323,7 @@ void motorControlLoop() {
     if (!foc_running) return;
 
     checkCommandTimeout();
+    trackSupplyVoltage();
 
     motor.loopFOC();
     motor.move(target_current);
@@ -350,6 +388,8 @@ uint8_t statusFlags() {
 }
 
 float measuredSupplyVoltage() { return supply_voltage; }
+float trackedSupplyVoltage() { return tracked_supply; }
+float phaseVoltageLimit() { return driver.voltage_limit; }
 
 float commandedCurrent() { return target_current; }
 

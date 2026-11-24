@@ -291,7 +291,7 @@ static bool ensurePowerStage() {
     Serial.println(F("Configuring DRV8316..."));
     driver.voltage_power_supply = measuredSupplyVoltageOrDefault();   // same as real firmware
     lastVin = driver.voltage_power_supply;
-    driver.voltage_limit = min(MOTOR_VOLTAGE_LIMIT, driver.voltage_power_supply);
+    driver.voltage_limit = min(MOTOR_VOLTAGE_LIMIT, MOTOR_MAX_DUTY * driver.voltage_power_supply);
     driver.init(&SPI_1);
     delay(10);
     configureDRV8316(driver);                  // same as the real firmware (hw/drv8316_setup.cpp)
