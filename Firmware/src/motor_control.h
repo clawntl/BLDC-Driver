@@ -4,13 +4,15 @@
 
 #include "board_settings.h"
 
-extern BLDCMotor motor;
+extern BLDCMotor &motor;
 
 // One-time driver/sensor/FOC configuration, including the direction and
 // stored alignment from the board settings. Call once from setup().
 void setupFOC();
 
-// Asks for FOC to be started (motor init + alignment, blocks ~1-3 s). The
+// Asks for FOC to be started (motor init, current-sense offsets, and the
+// alignment checks unless a stored alignment is used; blocks ~0.3 s with a
+// stored alignment, a few seconds without). The
 // start itself runs from motorControlLoop(), not from the caller, so it never
 // happens in the middle of CAN/serial processing. The result is reported over
 // CAN (CMD_START_FOC reply, CMD_ERROR on failure). A failed start can be

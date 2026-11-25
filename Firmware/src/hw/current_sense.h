@@ -25,6 +25,13 @@ bool currentSenseCalibratesWithPwm();
 // Expected zero-current offset, for the motor_test printout.
 const char *currentSenseOffsetHint();
 
+// True if init() checks the readings well enough (zero-current offsets in
+// the expected range) that SimpleFOC's driverAlign() check - which pulses
+// phases A and B for ~2.2 s, twitching the wheel - can be skipped when a
+// stored alignment is used. The phase-to-ADC wiring is fixed on the PCB;
+// a full alignment (no stored one) still runs the check.
+bool currentSenseCanSkipAlign();
+
 // Called from configureDRV8316(): DRV8316 settings this current sense needs
 // (e.g. the CSA gain for the DRV8316's own amplifiers). May do nothing.
 void currentSensePrepareDriver(DRV8316Driver &driver);

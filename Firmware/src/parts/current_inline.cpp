@@ -16,6 +16,8 @@ const char *currentSenseName() { return "inline shunts"; }
 // with the power stage off.
 bool currentSenseCalibratesWithPwm() { return false; }
 const char *currentSenseOffsetHint() { return CURRENT_SENSE_OFFSET_HINT; }
+// No offset check in init() here, so keep SimpleFOC's driverAlign().
+bool currentSenseCanSkipAlign() { return false; }
 
 void currentSensePrepareDriver(DRV8316Driver &) { }
 

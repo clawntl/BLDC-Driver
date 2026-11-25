@@ -37,7 +37,7 @@
 // Firmware version, reported by CMD_GET_INFO and the serial `config` command.
 #define FIRMWARE_VERSION_MAJOR 1
 #define FIRMWARE_VERSION_MINOR 7
-#define FIRMWARE_VERSION_PATCH 0
+#define FIRMWARE_VERSION_PATCH 1
 
 // Scale of the d current in CMD_SHAFT_VELOCITY: 16 mA per count, +-2.03 A.
 #define D_CURRENT_LSB_MA 16

@@ -63,6 +63,11 @@
 #define DRV8316_CSA_GAIN              Gain_0V25
 #define CURRENT_SENSE_MV_PER_A        600.0f
 #define CURRENT_SENSE_OFFSET_HINT     "~half the CSA reference (DRV8316 VREF/2)"
+// Plausible zero-current offsets (VREF = 3.3 V, so ~1.65 V; measured
+// 1.651-1.661 V). Outside this the amplifier or its ADC pin is faulty and
+// FOC start fails with ERR_CURRENT_SENSE.
+#define CURRENT_SENSE_OFFSET_MIN_V    1.40f
+#define CURRENT_SENSE_OFFSET_MAX_V    1.90f
 
 // The DRV8316's buck converter makes the board's 5 V. (Leave this undefined
 // on boards with their own 5 V supply: the buck is then switched off.)

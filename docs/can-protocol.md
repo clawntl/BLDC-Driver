@@ -115,7 +115,7 @@ Saved parameters and `CMD_CALIBRATION` change the **pending** settings, exactly 
 
 Payload: `[0x10]` (any extra bytes are ignored).
 
-This frame starts the motor: initialisation plus sensor alignment, which blocks for about 1–3 s. Alignment is skipped if a calibration is stored. The driver replies with a `CMD_START_FOC` frame. Sending the command again while FOC is already running simply replies "ok" again.
+This frame starts the motor: initialisation plus sensor alignment. It blocks for about 0.3 s with a stored alignment (the alignment and current-sense checks are skipped) and a few seconds without. The driver replies with a `CMD_START_FOC` frame. Sending the command again while FOC is already running simply replies "ok" again.
 
 #### Anti-cogging (`CMD_COGGING`, protocol 7)
 

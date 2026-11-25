@@ -126,4 +126,21 @@
 
 // At boot, wait up to this long for a serial terminal to open so the startup
 // messages aren't missed. Continues immediately once a terminal connects.
-#define BOOT_SERIAL_WAIT_MS 2'000
+// On the robot (no USB host) it always waits the full time; `config` and
+// `status` show the same information later anyway.
+#define BOOT_SERIAL_WAIT_MS 500
+
+// After changing the DRV8316 buck voltage (3.3 V power-on default -> 5 V),
+// wait this long for the 5 V rail (CAN transceiver, 3.3 V LDO) to settle.
+// The buck itself settles in well under a millisecond. Only waited when the
+// voltage actually changes, not on every FOC start.
+#define DRV8316_BUCK_SETTLE_MS 10
+
+// SimpleFOC's BLDCMotor::init() waits 500 ms before and 500 ms after
+// enabling the driver; this replaces both (see FastInitBLDCMotor).
+#define MOTOR_INIT_SETTLE_MS 10
+
+// Current-sense zero offset calibration at FOC start: this many readings,
+// 1 ms apart (SimpleFOC's own LowsideCurrentSense takes 2000, i.e. 2 s).
+// 250 averages the ADC noise to well under 1 mA.
+#define CURRENT_SENSE_OFFSET_ROUNDS 250

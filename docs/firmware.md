@@ -155,9 +155,9 @@ During a calibration the current loop's I is raised to at least 3000 V/(A·s) an
 
 ## Runtime behaviour
 
-1. **Boot.** The firmware waits up to 2 s for a serial terminal, loads settings, starts CAN (if the board is configured), measures VIN and configures the DRV8316. The motor is **not** energised yet.
+1. **Boot.** The firmware waits up to 0.5 s for a serial terminal, loads settings, starts CAN (if the board is configured), measures VIN and configures the DRV8316. The motor is **not** energised yet.
 2. **Idle.** The board waits for `CMD_START_FOC` over CAN (or `start` on the console) and sends a status heartbeat every 100 ms, which includes the live supply voltage.
-3. **Start.** The board writes the DRV8316 registers again, in case the board booted on USB power before the motor supply was connected. It then runs `motor.init()`, current-sense initialisation and `initFOC()`, which block for about 1–3 s. CAN frames received during the start are discarded. The result is reported as a `CMD_START_FOC` reply, and a `CMD_ERROR` frame is sent on failure. A failed start can be retried.
+3. **Start.** The board writes the DRV8316 registers again, in case the board booted on USB power before the motor supply was connected. It then runs `motor.init()`, current-sense initialisation and `initFOC()`. With a stored alignment this takes about 0.3 s: the sensor alignment is skipped, and on the DRV8316 board so is SimpleFOC's current-sense check (`driverAlign()`, which pulses phases A and B for ~2.2 s and twitches the wheel). The phase-to-ADC wiring is fixed on the PCB, so instead the zero-current offsets are checked against `CURRENT_SENSE_OFFSET_MIN_V`/`_MAX_V`. Without a stored alignment both checks run, which takes a few seconds and turns the wheel. The serial console prints how long each part of the start took. CAN frames received during the start are discarded. The result is reported as a `CMD_START_FOC` reply, and a `CMD_ERROR` frame is sent on failure. A failed start can be retried.
 4. **Running.** The board runs FOC current (torque) control. Target current comes from the board's current frame and is clamped to ±`MOTOR_CURRENT_LIMIT`. Shaft velocity is sent every 10 ms.
 
 ### Safety features
@@ -196,7 +196,10 @@ During a calibration the current loop's I is raised to at least 3000 V/(A·s) an
 | `CAN_STATUS_INTERVAL_MS` | 100 | Heartbeat period |
 | `DRV_STATUS_POLL_INTERVAL_MS` | 500 | DRV8316 fault poll period |
 | `WATCHDOG_TIMEOUT_US` | 250 000 | Watchdog timeout |
-| `BOOT_SERIAL_WAIT_MS` | 2 000 | How long to wait for a serial terminal at boot |
+| `BOOT_SERIAL_WAIT_MS` | 500 | How long to wait for a serial terminal at boot |
+| `DRV8316_BUCK_SETTLE_MS` | 10 | Wait after changing the DRV8316 buck voltage (only when it changes) |
+| `MOTOR_INIT_SETTLE_MS` | 10 | Replaces SimpleFOC's 2 × 500 ms waits in `BLDCMotor::init()` |
+| `CURRENT_SENSE_OFFSET_ROUNDS` | 250 | Current-sense offset readings at FOC start, 1 ms apart (SimpleFOC's default is 2000) |
 
 The CAN IDs and bit rate are in [`Firmware/include/can_protocol.h`](../Firmware/include/can_protocol.h). Hardware constants (pins, current-sense gain, `VSENS_CALIBRATION` and so on) are in the board headers, see [Boards](#boards).
 
