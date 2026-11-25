@@ -66,6 +66,41 @@
 #define CURRENT_LOOP_I_MAX       100000.0f
 #define CURRENT_LOOP_TF_MAX      0.01f
 
+// Anti-cogging (see src/cogging.h and docs/firmware.md#anti-cogging).
+// Calibration: the position loop that turns the rotor (defaults; `cog cal`
+// takes others), how fast, the most current it may use, and when it gives
+// up. Worked out in a simulation of a GM3506 wheel (inertia 1.4e-5 kg m^2,
+// Kt 0.054 N m/A) with a 2 ms current loop: much stiffer and the loop
+// oscillates, much softer and the rotor snaps from one cogging step to the
+// next instead of following.
+#define COG_CAL_KP             20.0f   // A/rad
+#define COG_CAL_KD             0.08f   // A/(rad/s)
+#define COG_CAL_SPEED          0.25f   // rad/s: one turn each way takes ~26 s
+#define COG_CAL_CURRENT_LIMIT  1.0f    // A
+#define COG_CAL_STALL_RAD      0.2f    // position error that counts as "not following"
+// During a calibration the current loop's I is raised to at least this (the
+// position loop needs the current within ~2 ms) and the velocity filter is
+// shortened to this; both go back afterwards.
+#define COG_CAL_CURRENT_I      3000.0f // V/(A s)
+#define COG_CAL_VELOCITY_TF    0.001f  // s
+// A host current command bigger than this aborts a calibration.
+#define COG_HOST_ABORT_A       0.05f   // A
+// The table keeps harmonics 1..COG_HARMONICS per turn (plus 264 and 528,
+// the slot/pole cogging of a 24-slot 22-pole motor); the rest of each bin is
+// measurement noise. The GM3506s measured so far cog mostly at 2, 22-26 and
+// 42-48 per turn.
+#define COG_HARMONICS          64
+// "Slots only" compensation (cogComp 2) leaves out harmonics 1..this.
+#define COG_LOW_HARMONICS      3
+// Compensation: the table is read ahead of the rotor by the current loop's
+// response time, (MOTOR_PHASE_RESISTANCE + P) / I (1.9 ms with P 3, I 3000),
+// and fades out between these shaft speeds (at 15 rad/s the 48-per-turn
+// component comes round 115 times a second, more than the current loop can
+// follow).
+#define MOTOR_PHASE_RESISTANCE 2.8f    // ohm per phase (GM3506; its datasheet's 5.6 is line-to-line)
+#define COG_FADE_START         6.0f    // rad/s
+#define COG_FADE_END           15.0f   // rad/s
+
 // Voltage applied during sensor alignment at startup, in Volts.
 #define MOTOR_VOLTAGE_SENSOR_ALIGN 3.0f
 
@@ -91,4 +126,21 @@
 
 // At boot, wait up to this long for a serial terminal to open so the startup
 // messages aren't missed. Continues immediately once a terminal connects.
-#define BOOT_SERIAL_WAIT_MS 2'000
+// On the robot (no USB host) it always waits the full time; `config` and
+// `status` show the same information later anyway.
+#define BOOT_SERIAL_WAIT_MS 500
+
+// After changing the DRV8316 buck voltage (3.3 V power-on default -> 5 V),
+// wait this long for the 5 V rail (CAN transceiver, 3.3 V LDO) to settle.
+// The buck itself settles in well under a millisecond. Only waited when the
+// voltage actually changes, not on every FOC start.
+#define DRV8316_BUCK_SETTLE_MS 10
+
+// SimpleFOC's BLDCMotor::init() waits 500 ms before and 500 ms after
+// enabling the driver; this replaces both (see FastInitBLDCMotor).
+#define MOTOR_INIT_SETTLE_MS 10
+
+// Current-sense zero offset calibration at FOC start: this many readings,
+// 1 ms apart (SimpleFOC's own LowsideCurrentSense takes 2000, i.e. 2 s).
+// 250 averages the ADC noise to well under 1 mA.
+#define CURRENT_SENSE_OFFSET_ROUNDS 250

@@ -16,10 +16,44 @@
 #include "can_bus.h"
 #include "motor_config.h"
 #include "board_settings.h"
+#include "cogging.h"
 
 static SPIClass SPI_1(SPI1_MOSI, SPI1_MISO, SPI1_SCK);
 
-BLDCMotor motor = BLDCMotor(MOTOR_POLE_PAIRS);
+// BLDCMotor::init() (Simple FOC 2.4.0) without its two fixed 500 ms waits
+// around enabling the driver (MOTOR_INIT_SETTLE_MS instead): they're just
+// settling time, and the DRV8316 is ready within microseconds. Re-check
+// against the library's init() when updating Simple FOC.
+class FastInitBLDCMotor : public BLDCMotor {
+public:
+    using BLDCMotor::BLDCMotor;
+
+    int init() override {
+        if (!driver || !driver->initialized) {
+            motor_status = FOCMotorStatus::motor_init_failed;
+            return 0;
+        }
+        motor_status = FOCMotorStatus::motor_initializing;
+        if (voltage_limit > driver->voltage_limit) voltage_limit = driver->voltage_limit;
+        if (voltage_sensor_align > voltage_limit) voltage_sensor_align = voltage_limit;
+        updateCurrentLimit(current_limit);
+        updateVoltageLimit(voltage_limit);
+        updateVelocityLimit(velocity_limit);
+        if (_isset(phase_inductance) && !(_isset(axis_inductance.q))) {
+            axis_inductance = {phase_inductance, phase_inductance};
+        }
+        // (The library's open-loop default direction doesn't apply: this
+        // firmware always has a sensor.)
+        delay(MOTOR_INIT_SETTLE_MS);
+        enable();
+        delay(MOTOR_INIT_SETTLE_MS);
+        motor_status = FOCMotorStatus::motor_uncalibrated;
+        return 1;
+    }
+};
+
+static FastInitBLDCMotor fastMotor(MOTOR_POLE_PAIRS);
+BLDCMotor &motor = fastMotor;
 
 //  BLDCDriver6PWM( int phA_h, int phA_l, int phB_h, int phB_l, int phC_h, int phC_l, int en)
 //  - phA_h, phA_l - A phase pwm pin high/low pair
@@ -192,6 +226,10 @@ void setupFOC() {
         motor.sensor_direction    = static_cast<Direction>(cfg.sensorDirection);
         motor.zero_electric_angle = cfg.zeroElectricAngle;
         calibration_used = true;
+        // The current-sense check pulses phases A and B (~2.2 s, a wheel
+        // twitch). With a stored alignment it has passed before on this
+        // board, and init() checks the offsets instead (see hw/current_sense.h).
+        current_sense.skip_align = currentSenseCanSkipAlign();
         Serial.print("Using stored alignment: dir ");
         Serial.print(cfg.sensorDirection);
         Serial.print(", zero electric angle ");
@@ -202,6 +240,7 @@ void setupFOC() {
 static bool startFOC() {
     // Not running yet: make sure nothing stale gets applied on the first move().
     target_current = 0;
+    const uint32_t t0 = millis();
 
     // Write the DRV8316 registers again. If the board booted on USB power
     // alone, the DRV8316 had no supply when setupFOC() configured it, so it
@@ -216,11 +255,13 @@ static bool startFOC() {
         applySupplyVoltage(tracked_supply, false);
     }
 
+    const uint32_t t1 = millis();
     if (!motor.init()) {
         Serial.println("Motor init failed!");
         sendError(ERR_MOTOR_INIT);
         return false;
     }
+    const uint32_t t2 = millis();
 
     // Some supply sensors share the ADC with the current sense and have to
     // know when it has taken over (see hw/supply.h).
@@ -229,9 +270,11 @@ static bool startFOC() {
     if (csOk)  Serial.println("Current sense init success!");
     else {
         Serial.println("Current sense init failed!");
+        motor.disable(); // motor.init() enabled it
         sendError(ERR_CURRENT_SENSE);
         return false;
     }
+    const uint32_t t3 = millis();
     // link the current sense to the motor
     motor.linkCurrentSense(&current_sense);
 
@@ -247,7 +290,18 @@ static bool startFOC() {
     // before this start (and not saved) still applies.
     applyCurrentLoopSettings(pendingSettings());
 
-    Serial.println(F("Motor ready."));
+    const uint32_t t4 = millis();
+    Serial.print(F("Motor ready. FOC start took "));
+    Serial.print(t4 - t0);
+    Serial.print(F(" ms: DRV8316 config "));
+    Serial.print(t1 - t0);
+    Serial.print(F(", motor init "));
+    Serial.print(t2 - t1);
+    Serial.print(F(", current sense "));
+    Serial.print(t3 - t2);
+    Serial.print(F(", initFOC "));
+    Serial.print(t4 - t3);
+    Serial.println(current_sense.skip_align ? F(" (stored alignment, checks skipped)") : F(""));
     return true;
 }
 
@@ -284,6 +338,7 @@ void requestStartFOC() {
 
 void setTargetCurrent(float amps) {
     if (!std::isfinite(amps)) return; // ignore NaN / Inf
+    Cogging::noteHostCurrent(amps);   // a real command aborts an anti-cogging calibration
     target_current = direction_sign * constrain(amps, -MOTOR_CURRENT_LIMIT, MOTOR_CURRENT_LIMIT);
     lastCommandMs = millis();
     if (command_timed_out) {
@@ -326,7 +381,9 @@ void motorControlLoop() {
     trackSupplyVoltage();
 
     motor.loopFOC();
-    motor.move(target_current);
+    // The host's current plus the anti-cogging compensation (when on), or
+    // during an anti-cogging calibration that calibration's own current.
+    motor.move(Cogging::update(target_current, pendingSettings().cogComp));
 
     // move() has already updated motor.shaft_velocity; calling
     // motor.shaftVelocity() again would feed the velocity low-pass filter a
@@ -343,6 +400,7 @@ void motorControlLoop() {
 }
 
 void stopMotor() {
+    Cogging::abort(Cogging::Failure::NotRunning);
     motor.disable();
     foc_running = false;
     target_current = 0;

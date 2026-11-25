@@ -77,7 +77,7 @@ The console runs at 115200 baud. Lines end in LF or CR, and commands are case-in
 | Command | Description |
 |---|---|
 | `help`, `?` | List commands |
-| `config`, `status` | Show active and pending settings, driver state, CAN IDs, supply voltage, commanded current |
+| `config`, `status` | Show the firmware, board and serial number, active and pending settings, driver state, CAN IDs, supply voltage, commanded current |
 | `set node 1-15` | Set the board's CAN node ID (sets its CAN IDs) |
 | `set side left\|right` | Shorthand for node 1 / node 2 |
 | `set invert on\|off` | Flip the sign of commanded current and reported velocity |
@@ -88,6 +88,12 @@ The console runs at 115200 baud. Lines end in LF or CR, and commands are case-in
 | `cur defaults` | Current loop back to the defaults (applies at once) |
 | `cal store` | Keep this boot's FOC alignment (FOC must already be running) |
 | `cal clear` | Forget the stored alignment |
+| `cog` | Anti-cogging status |
+| `cog on\|slots\|off` | Anti-cogging compensation: on, slots only (the lowest harmonics left out), off. Applies at once |
+| `cog cal [kp kd speed]` | Measure the cogging (FOC running, wheel free, ~55 s). Optional position loop gains (A/rad, A/(rad/s)) and sweep speed (rad/s) |
+| `cog refine [kp kd speed]` | Measure again with the table applied and add what is left |
+| `cog abort` / `cog clear` | Stop a calibration / forget the table |
+| `cog dump` | Print the table (and the last calibration's forward and backward curves) as CSV. Over CAN: `COG_READ` / `COG_INFO` |
 | `save` | Stop the motor, write settings to flash, verify and reboot |
 | `revert` | Discard unsaved changes |
 | `start` | Start FOC from the console (bench use; normally sent over CAN) |
@@ -119,11 +125,39 @@ The drivers use **Space Vector PWM**. The PWM scaling follows the **live supply 
 
 **Why it changed.** Sine PWM centres the phases on half the range and can only reach range / 2. Firmware 1.4 also scaled the PWM by the supply measured at boot, so as the battery ran down the real voltages fell below the commanded ones. The serial console's `status` shows the supply in use and the motor voltage.
 
+### Anti-cogging (firmware 1.7)
+
+A gimbal motor's magnets pull towards the stator teeth, so even with no current the rotor has preferred positions: on a 24-slot, 22-pole motor such as the GM3506, 264 of them per turn (every 1.36°). That **cogging** torque acts like a bumpy spring. A balancing robot holding still sits right in it, and its controller sees the bumps as disturbances: a small stick-slip sway. Motors differ, and new ones tend to cog more.
+
+Anti-cogging measures the cogging once and then cancels it: each FOC loop adds the current that counters the cogging at the rotor's angle.
+
+**Calibration** (`cog cal`, or `CMD_COGGING` calibrate). With FOC running and the wheel free to turn (robot on its back or on a stand), the board turns the rotor slowly with its own stiff position loop, one turn forwards and one back (~55 s), and records the average current that loop needs in each of 1920 angle bins (0.19° each). Friction pushes against the motion in each direction, so the mean of the two passes is the cogging and half their difference the friction.
+
+Only the repeatable part goes into the table: the harmonics 1–64 per turn, plus 264 and 528 (the slot/pole cogging of a 24-slot, 22-pole motor). On the first GM3506s measured (robot e4a7d0), each bin's value also carried ~20 mA of noise that differed between passes, while the cogging itself was almost all at 2, 22–26 and 42–48 per turn, and hardly anything at 264; the bump you feel turning the wheel by hand is the 24-per-turn one, every 15°. Without the filter the compensation played that noise back as fake cogging. The calculation takes ~25 ms at the end, with the rotor standing still.
+
+The result is reported as:
+
+- **peak-to-peak**: the size of the cogging, in mA;
+- **friction**: what it took to keep turning, in mA;
+- **agreement**: how alike the forward and backward curves are over the kept harmonics (above ~85 % is good; low means the rotor slipped, or friction that changes with the angle);
+- **noise left out**: rms of what the filter removed (shown after a calibration, until reboot);
+- **largest position error**: how far the rotor lagged its set point. Above ~5 mrad the cogging is strong compared with the position loop, and part of it gets smoothed away; run `cog refine` afterwards (it measures again with the table applied and adds what is left), or calibrate with a larger kp.
+
+During a calibration the current loop's I is raised to at least 3000 V/(A·s) and the velocity filter shortened to 1 ms; both go back afterwards. A current command over 50 mA from the host aborts it. The new table is pending until `save` (which reboots), and `revert` brings the stored one back.
+
+**Compensation** (`cog on`, `PARAM_COG_COMP`; off by default, a tuning setting like the current loop). The table is read ahead of the rotor by the time the current loop takes to follow, (`MOTOR_PHASE_RESISTANCE` + P) / I (1.9 ms with P 3, I 3000; 3.9 ms with I 1500), and fades out between 6 and 15 rad/s: by then the 48-per-turn part comes round more than 100 times a second, faster than the current loop can follow, and the wheel's inertia smooths it out anyway. The measured current reported in the velocity telemetry includes the compensation, so turn it off for spin tests.
+
+**Slots only** (`cog slots`, `PARAM_COG_COMP` 2) leaves harmonics 1–3 per turn out of the compensation. On e4a7d0, full compensation halved the 0.3–1 Hz sway while standing (tilt 0.17° → 0.09° rms in that band), but the robot started to wander slowly (position 0.02 → 0.15 rad rms below 0.3 Hz). The likely cause is the large 2-per-turn part (~25 mA): it probably depends on the load on the bearings, which differs between lying down (where it's measured) and standing. The bumps that cause the sway are the 20–48-per-turn ones.
+
+**Storage.** The table (1920 bytes and a 28-byte header with its own CRC) is kept in the settings flash page, after the settings. It belongs to the motor and magnet it was measured with: recalibrate after changing either (or after the stored FOC alignment changes direction, which the board detects: the table is then not applied).
+
+**How the numbers were chosen.** The defaults (kp 20 A/rad, kd 0.08 A/(rad/s), 0.25 rad/s) come from a simulation of a GM3506 wheel (inertia 1.4×10⁻⁵ kg·m², Kt 0.054 N·m/A, 1.5 mN·m friction) with a 2 ms current loop and the AS5048A's 14-bit resolution; the firmware's calibration code was run against the same model. With cogging of 3 mN·m amplitude at 264 per turn the compensation cut the cogging current from 42 to 3.8 mA rms (2.6 after a refine) and the speed ripple of a PI speed loop at 1 rad/s from 66 % to 10 %; with the shape measured on e4a7d0, from 36 to 0.3 mA rms and from 110 % to 2 %. (The model doesn't have the real measurement noise; the filter is what deals with that.) Much stiffer position loops oscillate; much softer ones let the rotor snap from step to step instead of following.
+
 ## Runtime behaviour
 
-1. **Boot.** The firmware waits up to 2 s for a serial terminal, loads settings, starts CAN (if the board is configured), measures VIN and configures the DRV8316. The motor is **not** energised yet.
+1. **Boot.** The firmware waits up to 0.5 s for a serial terminal, loads settings, starts CAN (if the board is configured), measures VIN and configures the DRV8316. The motor is **not** energised yet.
 2. **Idle.** The board waits for `CMD_START_FOC` over CAN (or `start` on the console) and sends a status heartbeat every 100 ms, which includes the live supply voltage.
-3. **Start.** The board writes the DRV8316 registers again, in case the board booted on USB power before the motor supply was connected. It then runs `motor.init()`, current-sense initialisation and `initFOC()`, which block for about 1–3 s. CAN frames received during the start are discarded. The result is reported as a `CMD_START_FOC` reply, and a `CMD_ERROR` frame is sent on failure. A failed start can be retried.
+3. **Start.** The board writes the DRV8316 registers again, in case the board booted on USB power before the motor supply was connected. It then runs `motor.init()`, current-sense initialisation and `initFOC()`. With a stored alignment this takes about 0.3 s: the sensor alignment is skipped, and on the DRV8316 board so is SimpleFOC's current-sense check (`driverAlign()`, which pulses phases A and B for ~2.2 s and twitches the wheel). The phase-to-ADC wiring is fixed on the PCB, so instead the zero-current offsets are checked against `CURRENT_SENSE_OFFSET_MIN_V`/`_MAX_V`. Without a stored alignment both checks run, which takes a few seconds and turns the wheel. The serial console prints how long each part of the start took. CAN frames received during the start are discarded. The result is reported as a `CMD_START_FOC` reply, and a `CMD_ERROR` frame is sent on failure. A failed start can be retried.
 4. **Running.** The board runs FOC current (torque) control. Target current comes from the board's current frame and is clamped to ±`MOTOR_CURRENT_LIMIT`. Shaft velocity is sent every 10 ms.
 
 ### Safety features
@@ -162,7 +196,10 @@ The drivers use **Space Vector PWM**. The PWM scaling follows the **live supply 
 | `CAN_STATUS_INTERVAL_MS` | 100 | Heartbeat period |
 | `DRV_STATUS_POLL_INTERVAL_MS` | 500 | DRV8316 fault poll period |
 | `WATCHDOG_TIMEOUT_US` | 250 000 | Watchdog timeout |
-| `BOOT_SERIAL_WAIT_MS` | 2 000 | How long to wait for a serial terminal at boot |
+| `BOOT_SERIAL_WAIT_MS` | 500 | How long to wait for a serial terminal at boot |
+| `DRV8316_BUCK_SETTLE_MS` | 10 | Wait after changing the DRV8316 buck voltage (only when it changes) |
+| `MOTOR_INIT_SETTLE_MS` | 10 | Replaces SimpleFOC's 2 × 500 ms waits in `BLDCMotor::init()` |
+| `CURRENT_SENSE_OFFSET_ROUNDS` | 250 | Current-sense offset readings at FOC start, 1 ms apart (SimpleFOC's default is 2000) |
 
 The CAN IDs and bit rate are in [`Firmware/include/can_protocol.h`](../Firmware/include/can_protocol.h). Hardware constants (pins, current-sense gain, `VSENS_CALIBRATION` and so on) are in the board headers, see [Boards](#boards).
 
@@ -255,6 +292,7 @@ The host tools need no changes: they show the model name and use the capability 
 | `src/motor_control.*` | SimpleFOC motor, driver, current sense and encoder; FOC start, command timeout, telemetry, fault polling |
 | `src/can_bus.*` | FDCAN setup and filters, frame encoding and decoding, heartbeat, bus-off recovery |
 | `src/board_settings.*` | Per-board settings in flash (EEPROM emulation, CRC-32 and version checked) |
+| `src/cogging.*` | Anti-cogging: calibration, the table (stored after the settings) and the compensation |
 | `src/serial_console.*` | Non-blocking USB serial command console |
 | `src/hw/` | Part interfaces (`encoder.h`, `current_sense.h`, `supply.h`), the shared DRV8316 setup, `board_info` (capabilities, model) and the supply code every sensor shares |
 | `src/parts/` | One file per part, compiled in when the board header selects it |
@@ -266,7 +304,9 @@ The host tools need no changes: they show the model name and use the capability 
 
 ### Flash size limit
 
-Settings live in the **last 2 KB flash page** (0x0801F800), so the firmware image must stay below **126 KB**. The firmware checks this at boot and before every save, and prints an error if the image overlaps the settings page.
+Settings live in the **last 2 KB flash page** (0x0801F800), so the firmware image must stay below **126 KB**. The firmware checks this at boot and before every save, and prints an error if the image overlaps the settings page. The page holds the settings (bytes 0–63) and the anti-cogging table (from byte 64).
+
+`lib_archive = false` links every object file of every library, and some unused ones stay in the image because they create global objects at start-up. `scripts/skip_unused_lib_sources.py` leaves SimpleFOCDrivers' `comms/` folder out of the build (~2.9 KB). Firmware 1.7 is then about 123 KB (more with some toolchains: a macOS build came out ~0.7 KB bigger).
 
 ## Bench-test firmware (`motor_test`)
 

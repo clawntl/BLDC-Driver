@@ -14,6 +14,7 @@ The protocol version is reported by `CMD_GET_INFO`, separately from the firmware
 | 4 | 1.3 | `CMD_GET_BOARD_INFO` (model name, capabilities); input current in the heartbeat on boards with `CAP_MEASURES_INPUT_CURRENT` |
 | 5 | 1.4 | `CMD_GET_PARAM`; current loop tuning (`PARAM_CURRENT_P/I/TF`) and the FOC loop rate (`PARAM_FOC_LOOP_HZ`) |
 | 6 | 1.6 | The measured q and d currents in `CMD_SHAFT_VELOCITY` (8 bytes) |
+| 7 | 1.7 | Anti-cogging: `CMD_COGGING`, `PARAM_COG_COMP`; the board's serial number (`CMD_GET_BOARD_INFO` pages 6–7) |
 
 ## Basics
 
@@ -78,6 +79,7 @@ These are sent on the board's command ID (`0x021` or `0x022`). The reply comes b
 | `0x26` | `CMD_REBOOT` | `[0x26]` | `[0x26][status]`, then the board resets (the motor stops) |
 | `0x27` | `CMD_GET_BOARD_INFO` (protocol 4) | `[0x27][page]` | see [Board description](#board-description-cmd_get_board_info-protocol-4) |
 | `0x28` | `CMD_GET_PARAM` (protocol 5) | `[0x28][param]` | `[0x28][param][status][float value]`: saved parameters read the pending value, the others the value in use |
+| `0x29` | `CMD_COGGING` (protocol 7) | `[0x29][op]` | see [Anti-cogging](#anti-cogging-cmd_cogging-protocol-7) |
 | | any other | | `[0xFE][command][1]` (`CMD_NACK`: not understood) |
 
 **Parameters (`CMD_SET_PARAM`, `CMD_GET_PARAM`):**
@@ -90,15 +92,16 @@ These are sent on the board's command ID (`0x021` or `0x022`). The reply comes b
 | `0x20` | `PARAM_CURRENT_P` | 0–50 V/A (default 3) | Tuning (protocol 5): current loop P, both axes |
 | `0x21` | `PARAM_CURRENT_I` | 0–100 000 V/(A·s) (default 300) | Tuning: current loop I, both axes |
 | `0x22` | `PARAM_CURRENT_TF` | 0–0.01 s (default 0.00053) | Tuning: time constant of the filter on the measured currents |
+| `0x23` | `PARAM_COG_COMP` | 0 off (default), 1 on, 2 slots only | Tuning (protocol 7): anti-cogging compensation |
 | `0x30` | `PARAM_FOC_LOOP_HZ` | read only | FOC loop rate while running, Hz (0 = not running). `CMD_SET_PARAM` answers status 1 |
 
 **Tuning** parameters apply at once (also while the motor runs) **and** change the pending settings: `CMD_SAVE` keeps them, `CMD_REVERT` goes back to the saved values. See [Current loop](firmware.md#current-loop).
 
 Saved parameters and `CMD_CALIBRATION` change the **pending** settings, exactly like the serial console's `set` and `cal`. They take effect after `CMD_SAVE`. `CMD_CALIBRATION` store needs FOC to be running (it keeps this boot's alignment); clear makes the next start run the sensor alignment.
 
-**Status byte:** 0 = OK, 1 = unknown command, parameter or operation, 2 = value out of range, 3 = no alignment to store (FOC not running), 4 = flash: the firmware image overlaps the settings page.
+**Status byte:** 0 = OK, 1 = unknown command, parameter or operation, 2 = value out of range, 3 = no alignment to store (FOC not running), 4 = flash: the firmware image overlaps the settings page, 5 = needs FOC running (protocol 7).
 
-**Config flags (`CMD_GET_CONFIG`):** bit 0 = invert, bit 1 = an alignment is stored, bit 2 = stored sensor direction is CCW, bit 3 = unsaved changes (pending differs from active).
+**Config flags (`CMD_GET_CONFIG`):** bit 0 = invert, bit 1 = an alignment is stored, bit 2 = stored sensor direction is CCW, bit 3 = unsaved changes (pending differs from active, or the anti-cogging table has been calibrated or cleared since the last save).
 
 `CMD_SAVE` and `CMD_REBOOT` stop the motor. A host must not send them while the robot is balancing.
 
@@ -112,7 +115,36 @@ Saved parameters and `CMD_CALIBRATION` change the **pending** settings, exactly 
 
 Payload: `[0x10]` (any extra bytes are ignored).
 
-This frame starts the motor: initialisation plus sensor alignment, which blocks for about 1–3 s. Alignment is skipped if a calibration is stored. The driver replies with a `CMD_START_FOC` frame. Sending the command again while FOC is already running simply replies "ok" again.
+This frame starts the motor: initialisation plus sensor alignment. It blocks for about 0.3 s with a stored alignment (the alignment and current-sense checks are skipped) and a few seconds without. The driver replies with a `CMD_START_FOC` frame. Sending the command again while FOC is already running simply replies "ok" again.
+
+#### Anti-cogging (`CMD_COGGING`, protocol 7)
+
+See [Anti-cogging](firmware.md#anti-cogging-firmware-17) for what it does. `[0x29][op]`:
+
+| op | Name | Does |
+|---|---|---|
+| 0 | `COG_STATUS` | Nothing; reports the status below |
+| 1 | `COG_CALIBRATE` | Starts a calibration: the board turns the rotor slowly one turn each way (~55 s). FOC must be running (else status 5) and the wheel free. The reply comes straight away; poll `COG_STATUS` for progress |
+| 2 | `COG_REFINE` | The same with the existing table applied, adding what is left to it. Status 2 without a table for this motor |
+| 3 | `COG_ABORT` | Stops a calibration |
+| 4 | `COG_CLEAR` | Forgets the table |
+| 5 | `COG_RESULT` | Reports the last calibration's quality (below) |
+| 6 | `COG_READ` | `[0x29][6][bin hi][bin lo]`: reads four table values (below) |
+| 7 | `COG_INFO` | The table's scale (below) |
+
+Reply to ops 0–4: `[0x29][op][status][state][progress % or failure][flags][table peak-to-peak, 4 mA units][friction, 2 mA units]`.
+
+- **State:** 0 = idle (no calibration since boot), 1 = settling, 2 = forward pass, 3 = backward pass, 4 = done, 5 = failed.
+- **Byte 4:** progress 0–100 % during and after a calibration; in state 5 the reason: 1 = FOC stopped, 2 = a current command arrived, 3 = the rotor didn't follow (wheel blocked?), 4 = aborted, 5 = angles missed in a pass, 6 = no table to refine.
+- **Flags:** bit 0 = a table is loaded, bit 1 = compensation switched on (`PARAM_COG_COMP`), bit 2 = table unsaved, bit 3 = table measured with the other sensor direction (not applied: recalibrate), bit 4 = compensation being applied now, bit 5 = the table's last calibration was a refine, bit 6 = compensation is in "slots only" mode.
+
+Reply to op 5: `[0x29][5][status][coverage %][forward/backward agreement %][largest position error, 0.1 mrad units, 255 = more][noise left out of the table, 0.5 mA units; 0 = no calibration since boot][0]`.
+
+Reply to op 6: `[0x29][6][bin hi][bin lo][4 × int8 table counts, bins bin…bin+3]`; bin hi `0xFF` = no table or a bad bin. 480 requests read the whole table.
+
+Reply to op 7: `[0x29][7][status][A per table count, float big-endian][bins / 16]`; status 2 without a table. A bin's current is its count × the scale; bin *b* covers 360° × *b* / bins to 360° × (*b* + 1) / bins of the encoder's raw angle, and the values are in the motor's own direction (not affected by the invert setting).
+
+A current command above 50 mA aborts a calibration, so the host must send 0 A (or nothing) while it runs. A new table, and `COG_CLEAR`, are pending until `CMD_SAVE`; `CMD_REVERT` brings back the stored table.
 
 ## Driver → host
 
@@ -160,7 +192,8 @@ With this command a host can show and use any board without keeping its own list
 |---|---|
 | 0 | `[0x27][0][capabilities, uint32 big-endian][hardware rev][0]` |
 | 1–5 | `[0x27][page][6 characters of the model name]`: characters 0–5, 6–11 and so on, NUL-padded after the end |
-| other | `[0xFE][0x27][2]` (bad value) |
+| 6–7 | `[0x27][page][6 bytes of the serial number]` (protocol 7): the MCU's 96-bit unique ID, bytes 0–5 then 6–11 (its three 32-bit words, each big-endian). Shown as 24 hex digits, as the serial console's `config` prints it |
+| other | `[0xFE][0x27][2]` (bad value; also pages 6–7 before protocol 7) |
 
 To read the model name, request pages 1, 2, … and stop at the first page that contains a NUL. A name is at most 30 characters.
 
